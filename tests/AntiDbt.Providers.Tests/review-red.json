@@ -1,0 +1,108 @@
+{
+  "scope": "localhost HTTP and WebSocket only; no cloud calls",
+  "redEvidence": "tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); initial red.log is build-only",
+  "tests": [
+    {
+      "name": "default settings and LiveInterpret gate",
+      "passed": true
+    },
+    {
+      "name": "MT real HTTP headers and documented body",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /error",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /status",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /redirect",
+      "passed": true
+    },
+    {
+      "name": "MT legacy authentication and explicit source",
+      "passed": true
+    },
+    {
+      "name": "MT cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR literal packets fragmented gzip dedup revision final",
+      "passed": true
+    },
+    {
+      "name": "ASR reject truncated",
+      "passed": true
+    },
+    {
+      "name": "ASR reject flags",
+      "passed": true
+    },
+    {
+      "name": "ASR reject gzip",
+      "passed": true
+    },
+    {
+      "name": "ASR reject shape",
+      "passed": true
+    },
+    {
+      "name": "ASR reject bomb",
+      "passed": true
+    },
+    {
+      "name": "ASR reject business",
+      "passed": true
+    },
+    {
+      "name": "ASR reject protocol",
+      "passed": true
+    },
+    {
+      "name": "ASR cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR final drain bounded",
+      "passed": true
+    },
+    {
+      "name": "endpoint and missing credential validation",
+      "passed": true
+    },
+    {
+      "name": "review shifted start and timestamp-only revision",
+      "passed": false,
+      "error": "Exception: provisional identity must survive shifted start"
+    },
+    {
+      "name": "review split and merge tombstones remove obsolete store rows",
+      "passed": false,
+      "error": "Exception: split and merge must delete replaced provisional suffix"
+    },
+    {
+      "name": "review cumulative finalized prefix dedup",
+      "passed": false,
+      "error": "Exception: cumulative order/final rows"
+    },
+    {
+      "name": "review extended nibble header",
+      "passed": false,
+      "error": "InvalidOperationException: \u8BED\u97F3\u670D\u52A1\u54CD\u5E94\u683C\u5F0F\u65E0\u6548\u3002"
+    },
+    {
+      "name": "review actual default ASR Store to MT automatic source",
+      "passed": false,
+      "error": "Exception: application auto sentinel must be omitted"
+    },
+    {
+      "name": "review disposal idempotent",
+      "passed": false,
+      "error": "ObjectDisposedException: The CancellationTokenSource has been disposed."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.packages/
+.dotnet-home/
+artifacts/
+data/
+*.user
+
+publish/
+.superpowers/
+

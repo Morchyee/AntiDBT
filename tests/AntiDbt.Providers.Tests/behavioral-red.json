@@ -1,0 +1,75 @@
+{
+  "scope": "localhost HTTP and WebSocket only; no cloud calls",
+  "redEvidence": "tests/AntiDbt.Providers.Tests/red.log (initial build failed; no diagnostic, not claimed behavioral RED)",
+  "tests": [
+    {
+      "name": "default settings and LiveInterpret gate",
+      "passed": true
+    },
+    {
+      "name": "MT real HTTP headers and documented body",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /error",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /status",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /redirect",
+      "passed": true
+    },
+    {
+      "name": "MT cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR literal packets fragmented gzip dedup revision final",
+      "passed": true
+    },
+    {
+      "name": "ASR reject truncated",
+      "passed": true
+    },
+    {
+      "name": "ASR reject flags",
+      "passed": true
+    },
+    {
+      "name": "ASR reject gzip",
+      "passed": true
+    },
+    {
+      "name": "ASR reject shape",
+      "passed": true
+    },
+    {
+      "name": "ASR reject bomb",
+      "passed": true
+    },
+    {
+      "name": "ASR reject business",
+      "passed": true
+    },
+    {
+      "name": "ASR reject protocol",
+      "passed": true
+    },
+    {
+      "name": "ASR cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR final drain bounded",
+      "passed": false,
+      "error": "TaskCanceledException: The operation was canceled."
+    },
+    {
+      "name": "endpoint and missing credential validation",
+      "passed": true
+    }
+  ]
+}

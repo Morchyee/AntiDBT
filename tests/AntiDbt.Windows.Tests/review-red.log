@@ -1,0 +1,9 @@
+PASS rate-and-callback-invariance
+PASS downmix-clipping-pcm-widths
+PASS ring-overflow-tail-and-alignment
+PASS bounded-channel-drops-oldest
+PASS dpapi-roundtrip-no-plaintext-and-recovery
+PASS wave-tail-timing-disposal-cancellation
+FAIL review-lifecycle-start-after-dispose: Assertion failed
+FAIL review-wave-unsupported-reader-release: The process cannot access the file 'F:\Program\antiDBT\prototype\tests\AntiDbt.Windows.Tests\bin\Debug\net9.0-windows\testtemp\8e1ce4bc90c946bc8b6e1c2c4fe81636\unsupported.wav' because it is being used by another process.
+FAIL review-ring-overflow-clock: Ring drop plus channel drop clock must be 12 seconds

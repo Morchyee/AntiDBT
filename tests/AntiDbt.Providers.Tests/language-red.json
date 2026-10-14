@@ -1,0 +1,107 @@
+{
+  "scope": "localhost HTTP and WebSocket only; no cloud calls",
+  "redEvidence": "tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); initial red.log is build-only",
+  "tests": [
+    {
+      "name": "default settings and LiveInterpret gate",
+      "passed": true
+    },
+    {
+      "name": "MT real HTTP headers and documented body",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /error",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /status",
+      "passed": true
+    },
+    {
+      "name": "MT safe error /redirect",
+      "passed": true
+    },
+    {
+      "name": "MT legacy authentication and explicit source",
+      "passed": true
+    },
+    {
+      "name": "MT cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR literal packets fragmented gzip dedup revision final",
+      "passed": true
+    },
+    {
+      "name": "ASR reject truncated",
+      "passed": true
+    },
+    {
+      "name": "ASR reject flags",
+      "passed": true
+    },
+    {
+      "name": "ASR reject gzip",
+      "passed": true
+    },
+    {
+      "name": "ASR reject shape",
+      "passed": true
+    },
+    {
+      "name": "ASR reject bomb",
+      "passed": true
+    },
+    {
+      "name": "ASR reject business",
+      "passed": true
+    },
+    {
+      "name": "ASR reject protocol",
+      "passed": true
+    },
+    {
+      "name": "ASR cancellation",
+      "passed": true
+    },
+    {
+      "name": "ASR final drain bounded",
+      "passed": true
+    },
+    {
+      "name": "endpoint and missing credential validation",
+      "passed": true
+    },
+    {
+      "name": "review shifted start and timestamp-only revision",
+      "passed": true
+    },
+    {
+      "name": "review split and merge tombstones remove obsolete store rows",
+      "passed": true
+    },
+    {
+      "name": "review cumulative finalized prefix dedup",
+      "passed": true
+    },
+    {
+      "name": "review extended nibble header",
+      "passed": true
+    },
+    {
+      "name": "review actual default ASR Store to MT automatic source",
+      "passed": true
+    },
+    {
+      "name": "review MT official language code aliases",
+      "passed": false,
+      "error": "Exception: documented en/zh codes"
+    },
+    {
+      "name": "review disposal idempotent",
+      "passed": true
+    }
+  ]
+}

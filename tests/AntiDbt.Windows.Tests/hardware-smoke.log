@@ -1,0 +1,18 @@
+F:\Program\antiDBT\prototype\src\AntiDbt.Windows\AntiDbt.Windows.csproj : warning NU1900: 获取包漏洞数据时出错: 无法加载源 https://api.nuget.org/v3/index.json 的服务索引。
+PASS rate-and-callback-invariance
+PASS downmix-clipping-pcm-widths
+PASS ring-overflow-tail-and-alignment
+PASS bounded-channel-drops-oldest
+PASS dpapi-roundtrip-no-plaintext-and-recovery
+PASS wave-tail-timing-disposal-cancellation
+PASS review-lifecycle-start-after-dispose
+PASS review-wave-unsupported-reader-release
+PASS review-ring-overflow-clock
+PASS review-delayed-capture-stop-and-cancel
+PASS review-capture-error-and-concurrent-disposal
+PASS review-settings-cleanup-gate-release
+PASS review-44100-and-signed-pcm-vectors
+PASS review-settings-version-and-ciphertext
+PASS review-concurrent-start-dispose
+{"captureBytes":0,"audioPersisted":false}
+PASS hardware-capture-smoke

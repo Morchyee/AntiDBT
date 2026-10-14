@@ -1,0 +1,6 @@
+PASS rate-and-callback-invariance
+PASS downmix-clipping-pcm-widths
+PASS ring-overflow-tail-and-alignment
+PASS bounded-channel-drops-oldest
+PASS dpapi-roundtrip-no-plaintext-and-recovery
+PASS wave-tail-timing-disposal-cancellation

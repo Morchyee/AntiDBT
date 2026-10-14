@@ -1,0 +1,7 @@
+Observed behavioral RED before ring.Read alignment guard:
+PASS rate-and-callback-invariance
+PASS downmix-clipping-pcm-widths
+FAIL ring-overflow-tail-and-alignment: Odd-byte reads must be rejected
+PASS dpapi-roundtrip-no-plaintext-and-recovery
+PASS wave-tail-timing-disposal-cancellation
+Exit code: 1

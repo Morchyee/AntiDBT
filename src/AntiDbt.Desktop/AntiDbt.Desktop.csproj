@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <AssemblyName>antiDBT</AssemblyName><RootNamespace>AntiDbt.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AntiDbt.Core/AntiDbt.Core.csproj" />
+    <ProjectReference Include="../AntiDbt.Windows/AntiDbt.Windows.csproj" />
+    <ProjectReference Include="../AntiDbt.Providers/AntiDbt.Providers.csproj" />
+  </ItemGroup>
+</Project>
