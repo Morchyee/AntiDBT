@@ -1,12 +1,29 @@
+# Build and output directories
 **/bin/
 **/obj/
-.packages/
-.dotnet-home/
-.dotnet/
-artifacts/
-data/
-*.user
-
 publish/
-.superpowers/
+artifacts/
 
+# Packages and runtimes
+.packages/
+.dotnet/
+.dotnet-home/
+
+# Runtime data and test artifacts
+data/
+*.log
+testtemp/
+smoke-verify/
+
+# IDE and Editor configurations
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# AI Agent and local assistant configurations
+.agents/
+.superpowers/

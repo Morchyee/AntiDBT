@@ -58,6 +58,13 @@ public sealed record TranslationConfiguration
 }
 public sealed record AppSettings
 {
+    // Empty is the legacy sentinel; LanguageSettings.Upgrade derives it from Asr.Language.
+    public string SourceLanguage { get; init; } = "";
+    public List<string> RecentLanguages { get; init; } = new();
+    public string Theme { get; init; } = "System";
+    public string FallbackTranslationProviderId { get; init; } = "";
+    public bool FallbackEnabled { get; init; }
+    public bool FallbackCostConsent { get; init; }
     public AsrConfiguration Asr { get; init; } = new();
     public TranslationConfiguration Translation { get; init; } = new();
     public Dictionary<string,AsrConfiguration> AsrProfiles { get; init; } = new();
@@ -77,4 +84,5 @@ public sealed record AppSettings
     }
     public int MaxHistory { get; init; } = 2000;
     public int SilenceSeconds { get; init; } = 7;
+    public double BackgroundOpacity { get; init; } = 0.80;
 }

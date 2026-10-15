@@ -22,9 +22,11 @@ public static class ProviderDescriptors
         new("AzureTranslator","Microsoft Translator（Azure）","官方 Azure 文本翻译；区域按资源类型填写",false,true,[F("Endpoint","Translate endpoint",value:"https://api.cognitive.microsofttranslator.com/translate",required:true),F("ApiKey","Translator Key",true,true),F("region","Region（资源需要时必填）")],["Azure Translator 官方语言列表"]),
         new("GoogleTranslationBasic","Google Cloud Translation Basic","V2 API Key 模式；与 Speech 服务账户认证独立",false,true,[F("Endpoint","Basic V2 地址",value:"https://translation.googleapis.com/language/translate/v2",required:true),F("ApiKey","受限 Google API Key",true,true)],["Google Translation 官方语言列表"]),
         Llm("GroqLlm","Groq LLM","https://api.groq.com/openai/v1"),
-        Llm("OpenAiCompatible","自定义 OpenAI 兼容","https://api.openai.com/v1")
+        Llm("OpenAiCompatible","OpenAI 兼容（多服务商）","https://api.openai.com/v1"),
+        new("BaiduTranslate","百度翻译开放平台","通用文本翻译；部分语言需要账户高级权益",false,true,[F("Endpoint","官方 HTTPS 地址",value:"https://fanyi-api.baidu.com/api/trans/vip/translate",required:true),F("appId","APPID",required:true),F("ApiKey","密钥",true,true),F("extendedLanguages","已确认开通高级语言权益",value:"false",choices:["false","true"])],["统一语言目录；高级语言以账户权益为准"]),
+        new("AliyunMT","阿里云机器翻译","官方 SDK TranslateGeneral；取消等待后在途调用可能继续计费",false,true,[F("Endpoint","官方地域端点",value:"https://mt.cn-hangzhou.aliyuncs.com",required:true,choices:["https://mt.cn-hangzhou.aliyuncs.com","https://mt.ap-southeast-1.aliyuncs.com"]),F("region","地域",value:"cn-hangzhou",required:true,choices:["cn-hangzhou","ap-southeast-1"]),F("accessKeyId","AccessKey ID（加密保存）",true,true),F("ApiKey","AccessKey Secret",true,true)],["统一语言目录的27种主要语言"])
     };
-    static ProviderDescriptor Llm(string id,string name,string url)=>new(id,name,"Chat Completions 文本翻译；模型由用户填写/获取，短上下文；兼容能力取决于服务",false,true,[F("Endpoint","Base URL（HTTPS，禁止自动重定向）",value:url,required:true),F("ApiKey","API Key",true,true),F("Model","文本模型 ID（不预设过时列表）",required:true),F("temperature","温度",value:"0"),F("maxTokens","最大输出 Token",value:"512"),F("prompt","可选提示词，支持 {target}/{source}")],["由模型支持的语言"]);
+    static ProviderDescriptor Llm(string id,string name,string url)=>new(id,name,"Chat Completions 文本翻译；语言能力须按所选模型确认",false,true,[F("Endpoint","Base URL（HTTPS，禁止自动重定向）",value:url,required:true),F("ApiKey","API Key",true,true),F("Model","文本模型 ID（手动输入或显式获取）",required:true),F("modelLanguages","已确认模型语言（逗号分隔，如 zh-Hans,en,ja）"),F("temperature","温度",value:"0"),F("sendTemperature","发送温度参数",value:"false",choices:["false","true"]),F("maxTokens","最大输出 Token",value:"512"),F("tokenLimitParameter","Token 上限参数",value:"none",choices:["none","max_tokens","max_completion_tokens"]),F("allowLocalHttp","明确允许本机 HTTP 测试端点",value:"false",choices:["false","true"]),F("prompt","可选提示词，支持 {target}/{source}")],["模型相关；未声明不保证支持"]);
     public static ProviderDescriptor Find(string id,bool asr)=>(asr?Asr:Translation).FirstOrDefault(x=>x.Id==id)??throw ProviderHttp.Failure(ProviderErrorKind.Configuration);
     public static AsrConfiguration DefaultAsr(string id)
     {
@@ -40,7 +42,7 @@ public static class ProviderDescriptors
     public static string? Validate(TranslationConfiguration c)=>Validate(Find(c.Provider,false),c.ApiKey,c.Endpoint,c.Model,"",c.Options,c.Secrets);
     static string? Validate(ProviderDescriptor d,string key,string endpoint,string model,string language,Dictionary<string,string> options,Dictionary<string,string> secrets)
     {
-        if(endpoint.Length>0&&(!Uri.TryCreate(endpoint,UriKind.Absolute,out var uri)||uri.UserInfo.Length>0||uri.Query.Length>0||uri.Fragment.Length>0||uri.Scheme!=(d.Id=="VolcengineAsr2"?"wss":"https")))return "服务地址无效，请使用正确的安全协议";
+        if(endpoint.Length>0&&(!Uri.TryCreate(endpoint,UriKind.Absolute,out var uri)||uri.UserInfo.Length>0||uri.Query.Length>0||uri.Fragment.Length>0||uri.Scheme!=(d.Id=="VolcengineAsr2"?"wss":"https")&&!(d.Id=="OpenAiCompatible"&&options.GetValueOrDefault("allowLocalHttp")=="true"&&uri.Scheme=="http"&&uri.IsLoopback)))return "服务地址无效，请使用正确的安全协议；自托管本机 HTTP 需要明确启用";
         foreach(var f in d.Fields)
         {
             string value=f.Key switch{"ApiKey"=>key,"Endpoint"=>endpoint,"Model"=>model,"Language"=>language,_=>f.Secret?secrets.GetValueOrDefault(f.Key,""):options.GetValueOrDefault(f.Key,"")};

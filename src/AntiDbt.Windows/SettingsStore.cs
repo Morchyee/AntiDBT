@@ -79,7 +79,7 @@ public sealed class SettingsStore
                 }
                 if(restored.Asr.Provider.Length>0)asr[restored.Asr.Provider]=restored.Asr;
                 if(restored.Translation.Provider.Length>0)mt[restored.Translation.Provider]=restored.Translation;
-                return restored with{AsrProfiles=asr,TranslationProfiles=mt};
+                return LanguageSettings.Upgrade(restored with{AsrProfiles=asr,TranslationProfiles=mt});
             }
             catch (Exception e) when (e is JsonException or InvalidDataException or
                 CryptographicException or FormatException or ArgumentException)
@@ -94,6 +94,7 @@ public sealed class SettingsStore
     public async Task SaveAsync(AppSettings settings)
     {
         Validate(settings);
+        settings=LanguageSettings.Upgrade(settings);
         await gate.WaitAsync();
         string? temporary = null;
         try

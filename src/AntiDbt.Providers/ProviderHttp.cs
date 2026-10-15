@@ -12,7 +12,7 @@ internal sealed class ProviderHttp
     DateTimeOffset coolingUntil;
     public ProviderHttp(HttpClient? testClient = null) => client = testClient ?? Shared;
 
-    public async Task<JsonDocument> JsonAsync(Func<HttpRequestMessage> create, int timeoutSeconds, CancellationToken token, bool retryServerErrors = true)
+    public async Task<JsonDocument> JsonAsync(Func<HttpRequestMessage> create, int timeoutSeconds, CancellationToken token, bool retryServerErrors = true, bool retryRateLimits = true,Func<HttpStatusCode,byte[],ProviderErrorKind>? errorClassifier=null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 120)));
@@ -41,16 +41,16 @@ internal sealed class ProviderHttp
                 }
                 if (response.StatusCode == HttpStatusCode.TooManyRequests)
                 {
-                    if(Classify(response.StatusCode,payload)==ProviderErrorKind.Quota)throw Failure(ProviderErrorKind.Quota);
+                    if((errorClassifier??Classify)(response.StatusCode,payload)==ProviderErrorKind.Quota)throw Failure(ProviderErrorKind.Quota);
                     var retry = response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow) ?? TimeSpan.FromSeconds(1);
                     if (retry < TimeSpan.Zero) retry = TimeSpan.Zero;
                     lock (gate) {var candidate=DateTimeOffset.UtcNow+retry;if(candidate>coolingUntil)coolingUntil=candidate;}
-                    if (attempt == 0) continue;
+                    if (attempt == 0 && retryRateLimits) continue;
                     throw new ProviderException(ProviderErrorKind.RateLimited, "请求限流，正在遵守服务冷却时间", retry);
                 }
                 if ((int)response.StatusCode >= 500 && retryServerErrors && attempt == 0)
                 { await Task.Delay(300, deadline.Token); continue; }
-                if (!response.IsSuccessStatusCode) throw Failure(Classify(response.StatusCode, payload));
+                if (!response.IsSuccessStatusCode) throw Failure((errorClassifier??Classify)(response.StatusCode, payload));
                 try { return JsonDocument.Parse(payload); }
                 catch (JsonException) { throw Failure(ProviderErrorKind.InvalidResponse); }
             }
@@ -60,7 +60,7 @@ internal sealed class ProviderHttp
         catch (HttpRequestException) { throw Failure(ProviderErrorKind.Network); }
         catch (IOException) { throw Failure(ProviderErrorKind.Network); }
     }
-    static ProviderErrorKind Classify(HttpStatusCode status, byte[] payload)
+    internal static ProviderErrorKind Classify(HttpStatusCode status, byte[] payload)
     {
         string code = "";
         try

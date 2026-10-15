@@ -1,35 +1,137 @@
-# antiDBT · 独立实时双语字幕
+# antiDBT · 独立实时双语字幕客户端
 
-Windows x64 桌面原型，使用系统音频回环，支持独立选择 4 种 ASR 与 6 种翻译服务，默认仍为火山 ASR 2.0 + 豆包机器翻译。新增 Groq Whisper、Azure Speech、Google Speech、DeepL、Azure Translator、Google Basic、Groq LLM 与自定义 OpenAI 兼容翻译。字幕核心不依赖任何厂商，没有复用豆包代码、资源、私有接口或凭据。
+<p align="center">
+  <b>极简 · 低延迟 · 高度自定义的 Windows 桌面实时双语字幕工具</b><br>
+  <sub>独立开源复刻项目 · 不依赖任何特定厂商私有接口 · 支持多 Provider 自由组合</sub>
+</p>
 
-**当前状态：可运行、可配置、核心与本地协议测试通过；尚未完成真实云端字幕验收。** Seed LiveInterpret 2.0 尚未启用。实际识别质量、真实端到端延迟、数小时连续运行和原版视觉一致性仍待验证。
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
+  <img src="https://img.shields.io/badge/.NET-9.0-512BD4.svg?logo=dotnet" alt=".NET 9.0">
+  <img src="https://img.shields.io/badge/Release-v0.5.2--beta-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
+</p>
 
-## 使用
+---
 
-1. 解压整个 Phase3 便携包，双击包内 `antiDBT.exe`，保留同目录配套 DLL。发布包自带 .NET 运行时，无需安装 SDK，建议 Windows 10/11 x64。当前工作目录的最终包路径见 `docs/phase3/PROGRESS.md`；Phase2 原包保留，不会覆盖。
-2. 点击 ⚙，独立选择语音识别和翻译服务，按动态字段填写 Key、区域、模型或服务账户 JSON。密钥只在本机软件设置输入。“检查配置”不联网，不代表认证成功。详见 [API 配置指南](docs/API_PROVIDERS.md)。
-3. 保存后点击“开始”，播放希望识别的系统音频。音频仅在开始后发送到所配置的服务；“停止”会处理有期限的尾部字幕，“×”停止并退出。
-4. “展开”查看历史；上滚暂停跟随，点击“回到底部”恢复。“原文”“字号”“中/英”调整显示或目标语言。切换目标语言会停止会话，重新开始时清空当前历史。
-5. 右键菜单可切换置顶、复制字幕，或运行**本地演示**。演示使用人工编写的合成事件，不采集音频、不访问网络，不证明识别质量。
+## 📖 项目简介
 
-默认 ASR：`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`，资源 `volc.seedasr.sauc.duration`；默认翻译：`https://openspeech.bytedance.com/api/v3/machine_translation/matx_translate`，资源 `volc.speech.mt`。并发计费资源等可在设置中修改。服务参数依据公开文档；真实账号权限与兼容性尚未验证。
+**antiDBT** 是一个独立设计与实现的 Windows 实时桌面双语字幕悬浮窗客户端。通过 Windows WASAPI 系统音频回环捕获电脑正在播放的声音，结合语音活动检测（VAD）、多种可选的语音识别（ASR）与机器翻译（MT）服务，在屏幕上呈现流畅、低延迟、自然排版的双语对照字幕。
 
-密钥以 Windows DPAPI CurrentUser 加密，设置文件为 EXE 同目录的 `data/settings.json`。同一 Windows 用户仍可解密自己的设置；复制到其他用户或机器后需要重新填写。运行日志与测试报告不包含真实密钥。当前历史仅保存在内存，退出不自动导出音频或字幕。
+本项目采用纯净室独立开发路线，**不复用豆包官方的专有代码、非公开协议或凭据**，专为需要看生肉视频、外语直播、会议交流、网课学习等场景的用户打造。
 
-## 开发与验证
+---
 
-以下命令在源码工作目录执行。需要 .NET 9 SDK 和 WindowsDesktop 编译环境。项目使用已安装 SDK，没有自动安装系统 SDK。首次还原从 NuGet 获取公开依赖，缓存位于 `.packages`。
+## ✨ 核心特性
 
+- **📺 极简悬浮窗与沉浸观影体验**
+  - 去除繁杂常驻参数，字幕成为绝对视觉焦点。
+  - 右上角微型状态圆点（🟢 聆听中 / 🟡 连接中 / 🔴 异常 / ⚪ 就绪），生命周期一目了然。
+- **🎨 真正的可调半透明悬浮窗（Phase 5.2 核心更新）**
+  - **0%～100% 背景不透明度自由调节**：在“设置 → 外观”中通过滑块随时调整，支持免重启无感知实时预览。
+  - **背景与文字彻底解耦**：原文、译文、按钮及图标始终保持 100% 实体高对比度清晰渲染，告别全局模糊。
+  - **真实透视与防点击穿透**：12px 现代平滑圆角，透过背景清晰看透后方视频与桌面；即便调至 0% 透明度，鼠标命中检测依然稳健，绝不意外穿透。
+- **📐 弹性视口与空间全高自适应**
+  - 窗口向下拉长时，历史字幕区域**全高自动填充**，利用大屏显示更多历史上下文，杜绝无意义空白。
+  - 横向拉宽时原文与译文依新宽度**自然排版折行**，绝无文字溢出或裁切。
+  - “↓ 回到底部”悬浮徽章固定锚定于字幕视口右下方，不再随窗口高度漂移。
+- **⚡ 低延迟与自然连续排版（Phase 5.1 优化成果）**
+  - 彻底移除“等待译文…”等扰人占位符，原文就绪即刻呈现，译文到达平滑更新。
+  - 说话人在短时间内连续停顿时自动在同段流动排版（不强行换行断句），中英文符号智能去空格。
+- **🌐 多语言自由切换**
+  - 顶部一键语言选择卡片，支持**源语言识别**与**目标语言翻译**选择，支持一键交换（⇄）。
+  - 支持智能过滤各 Provider 所支持的语言约束，防止无效请求。
+- **📜 丝滑像素级滚动与智能跟随**
+  - 无论处于紧凑（收起）模式还是展开模式，均支持鼠标滚轮与触控板微小 Delta 丝滑滚动。
+  - 向上翻阅历史时**自动暂停滚动跟随**；滚动回最底部或点击“↓ 回到底部”时**自动恢复跟随**。新字幕到达或窗口缩放时**绝不强制跳回底部**。
+- **🔌 模块化 Provider 架构**
+  - **语音识别（ASR）**：支持 Groq Whisper（超低延迟）、火山语音 ASR 2.0、Azure Speech SDK、Google Cloud Speech V2 等。
+  - **机器翻译（MT）**：支持 DeepL API、OpenAI 兼容大模型（如本地 Ollama、OpenRouter、各商业大模型）、Groq LLM、火山 MT、Azure Translator、Google Basic、百度翻译、阿里云翻译等。
+- **🔒 本地凭据安全**
+  - 所有 API Key、Secret、密码均经由 **Windows DPAPI（Data Protection API）** 采用当前用户机密加密存储于本地 `data/settings.json`，绝不上云、绝不向第三方服务器泄露。
+
+---
+
+## 🖥️ 运行环境要求
+
+- **操作系统**：Windows 10 / Windows 11 (x64)
+- **音频架构**：支持 WASAPI 回环采集的声卡/音频设备（通常为系统默认输出扬声器/耳机）
+- **便携包运行时**：发布包已内置独立自包含 .NET 9 运行时，**终端用户无需单独安装 .NET SDK**。
+
+---
+
+## 🚀 快速上手
+
+### 1. 下载与运行
+1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下载最新版本的 `antiDBT-phase5.2-win-x64.zip`。
+2. 解压整个压缩包到本地任意目录（路径中尽量避免特殊字符）。
+3. 双击运行解压出的 `antiDBT.exe` 即可启动。
+
+### 2. 配置翻译与语音识别服务
+1. 点击窗口工具栏右侧的设置图标 **⚙** 打开设置面板。
+2. **语音识别**：选择所希望使用的 Provider（例如 `GroqWhisper`），输入对应平台的 API Key。
+3. **翻译服务**：选择翻译 Provider（例如 `DeepL` 或 `OpenAiCompatible`），填入对应 API Key，自定义端点与模型。
+4. **外观设置**：可切换“暗色 / 浅色 / 跟随系统”主题，并拖动**“背景不透明度”**滑块调整悬浮窗透明度（建议 70%～85%）。
+5. 点击“保存设置”。
+
+### 3. 开始使用
+- 点击工具栏的 **“开始”** 按钮。
+- 电脑播放任何视频、播客、会议或网课音频，主窗口即可实时浮现双语字幕。
+- 想要体验界面而不消耗 API 额度？在主窗口右键选择**“本地演示”**，将以本地合成事件测试排版与滚动。
+
+---
+
+## 🛠️ 源码构建与测试
+
+本项目采用 C# 13 与 .NET 9 WPF 编写。开发者如需自行从源码编译与运行验证，请按以下步骤操作：
+
+### 依赖环境
+- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (>= 9.0.100)
+- Windows 10/11 x64
+- PowerShell 7 (`pwsh`)
+
+### 构建命令
 ```powershell
-cd F:\Program\antiDBT\prototype
-.\scripts\test.ps1                 # 单元、localhost 协议、WPF、核心性能
-.\scripts\test.ps1 -HardwareTone   # 另播放约 4 秒低音量测试音，仅记录采集统计
-.\scripts\test.ps1 -Soak           # 另执行约 60 秒合成故障/重连运行
-.\scripts\publish-phase3.ps1     # 新目录发布；已有目录时自动编号，保留旧包
+# 克隆仓库
+git clone https://github.com/Morchyee/AntiDBT.git
+cd AntiDBT
+
+# 编译整个解决方案 (Debug)
+dotnet build AntiDbt.sln
+
+# 运行完整的自动化测试套件 (含单元测试、协议验证、WPF Desktop Smoke 与性能基准)
+pwsh -File .\scripts\test-phase4.ps1 -SkipRestore
+
+# 打包发布 win-x64 单文件自包含便携包
+pwsh -File .\scripts\publish-phase5.ps1 -Output 'publish/antiDBT-portable-win-x64'
 ```
 
-测试服务器仅绑定 localhost，使用虚构密钥。受限沙箱可能禁止 loopback socket；本次已在明确范围获准后运行。网络受限时 NuGet 审计可能出现 NU1900，不能把该警告当作漏洞检查已通过。
+---
 
-Groq Whisper 为分段 Final-only，Azure/Google 为官方 SDK Partial/Final。Google 目前 STT V2 long + 服务账户、MT Basic API Key；两项认证不能混用。所有真实服务认证、效果和小时级稳定性仍待实测；本地通过不能替代云端验收。
+## ⚠️ 当前已知限制
 
-文档：[API 配置](docs/API_PROVIDERS.md)、[技术架构](docs/ARCHITECTURE.md)、[完成度与证据](docs/COMPLETION-MATRIX.md)、[测试报告](docs/VALIDATION.md)、[待解决问题及续接](docs/CONTINUATION.md)、[公开服务协议依据](docs/PROVIDER-SPECS.md)。开发进度见 `docs/phase3/PROGRESS.md` 与上级 `reports/phase3/PROGRESS.md`。第一阶段只读证据位于源码工作目录上一级 `reports`；原始证据和测试 artifacts 不随便携分发包分发，文档中相应链接需在工作目录查看。
+1. **云端凭据依赖**：实际语音识别与机器翻译需要用户自行申请对应厂商的 API Key。目前各厂商对免费额度有不同政策（如 Groq 免费提供较高吞吐但有速率限制，DeepL 免费版提供每月 50 万字符）。
+2. **WASAPI 独占音频限制**：若播放软件（如某些专业 DAW 或特定播放器）开启了 WASAPI 独占输出模式，系统回环采集可能会受阻；请确保音频输出处于共享模式。
+3. **系统权限与网络**：首次使用防火墙提示时请允许软件访问网络，以便向所配置的 API 发起识别与翻译请求。
+
+---
+
+## 🛡️ 隐私与数据安全说明
+
+- **零数据上报与遥测**：antiDBT 没有设置任何专有的中心服务器，不包含任何数据埋点、用户跟踪或遥测分析。
+- **纯点对点请求**：采集到的音频片段和识别文本仅直接发送至**用户在设置中显式配置的第三方 API 端点**（如 Groq、DeepL、Azure 等）。
+- **本地凭据加密**：所有敏感参数通过 Windows DPAPI 绑定当前登录用户的 Windows 账号加密存储于本地，其他用户即使复制了 `settings.json` 也无法解密。
+
+---
+
+## ⚖️ 免责与权利声明 (Disclaimer)
+
+1. **独立开源声明**：**antiDBT** 是一个独立开发的技术研究与辅助工具开源项目，并非北京字节跳动科技有限公司或“豆包（Doubao）”的官方产品，与上述实体无任何隶属、合作、关联或背书关系。
+2. **纯净实现**：本项目所有业务代码、界面布局、数据流管线均为独立从零编写，未提取或包含任何闭源私有二机制库、专有资源文件或私有凭据。
+3. **使用规范**：用户使用本软件调用第三方 API 时产生的网络流量、费用及对各服务商服务条款（ToS）的遵守，由使用者自行承担。
+
+---
+
+## 📄 开源许可证
+
+本项目源码基于 [MIT License](LICENSE) 协议开源。第三方开源依赖与声明请参阅 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

@@ -1,0 +1,20 @@
+# Phase4 code audit
+
+2026-10-15; baseline4e19fc5 onphase3-providers, cleanbeforebranchcreation. Phase4branchindependent; r4EXE/ZIPnotmodified, neverreadr4/data/usercredentials. User'ssuccessfulGroq+DeepLreportseparatefromagentcloudtesting.
+
+| Existing file/module | Verified state | Phase4 change |
+|---|---|---|
+|CoreContracts|Vendor-neutralAsrResult/TranslationRequest/IAudioSource/IAsrProvider/ITranslationProvider; AppSettingsTargetLanguagezhdefault, Asr.Languageperprofile|Addcanonicalsource/recent/theme/backupconsentsettings, neutralregistry/migration. Keepinterfaces.|
+|CoreScheduler/Store/Pipeline|revision/generationguard,Finalattemptcancel/priorityqueue,two slots,128jobs/cache,16uncooperativeguard; singleusepipeline|Reuse; language runtime transitions stopold/dispose/recreate, same-languageMTpassthroughoutsidecorevendorlogic.|
+|MainWindow|Onezh/enbutton, languagechange stops; settingsalwaysstopoldpipeline; testmodeavoidsactualconfigread, source-first/historystore/scroll/copy/pin/drag/resizereusable|Replacevisibletoolbarwithsearchpickers/swap/status; directactualstop/restartandpersist, truthfulevents. Preservetesthooksandfeatures.|
+|SettingsWindow|SinglelongScrollViewerwithTextBox/PasswordBox; noPreviewMouseWheelrelay; independentprofileeditors/authority-keyclearing; explicitGroqmodelGET|Modernnav/cards/theme, dynamiclanguagecapabilities/probes/costconsent, reusablewheelrelay+focus/popup/multilineedgefixtures.|
+|SettingsStore|v1/v2DPAPIatomicenvelope,allprofilekeys/mapsencrypted,scheme-authoritybinding+selectedprofileguard|Additivepubliclanguage/thememetadata; preservecrypto/schema2; derivelegacyAsr.Languagewithoutdiscardingkeys. Newsecrets useexistingmaps.|
+|HTTPMT|Hardcodedbase-languageflatteningforGoogle/Azure,DeepLENUS/PTPTspecial;prompttargetfromrequest;5HTTPadapters+originalVolcseparate|Replacewithperprovidermaps/capabilities,cacheDeepLlanguages,officialpresets/probes/fallback.|
+|ASRs|Volcsetsconfig.Languageinaudio;GroqaddsbaseISOoromits;Azure/GooglevalidatedBCP47;Googlefixedlong|Factorymapscanonicaltoproviderconfig, officialmodel/region/sourceconstraintsneedresearchbeforeadvertising. Keepbinaryprotocolalgorithm.|
+|Tests/scripts|Core36/Windows19/Volc26/HTTP86/SDK36/WPF26/combos13+native/perf/shortsyntheticsoak|Retaincoverage; adaptonlyaddedprovider/defaultmappingassertions, newLanguage/DOMESTIC/pipeline/UIwheel/dpi testsandphase4publishscript.|
+
+No pre-existingOS-levelclick-throughfeaturewasfound; preservecurrentinteractivedrag/copy/focusbehavior, don'tclaimlostfeatureornewclick-throughwithoutimplementation/test.
+
+Runtimeprivacy: paidtestsonlyuserbuttonandcostconfirmation; developmenttestsdummykeys/localhost, no savedcredentials loaded. Userrequest allowsnewpublicSDKpackage where needed, notarbitrarysystemtoolinstall.
+
+Primaryresearchinprogressfoundimportantconstraints: Volcasyncaudio.languagefielddiffersfromnostream; GoogleV2longlanguagesdifferfromchirp. ConcreteversionedcapabilitytablecomesfromLANGUAGE-SPECS, notguessingfromvendorname.

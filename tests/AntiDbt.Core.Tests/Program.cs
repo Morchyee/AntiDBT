@@ -18,7 +18,7 @@ Test("bounded history drops oldest", () => { var s = new SubtitleStore(2); var n
 Test("duplicate events do not bump timestamps", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("hello")); Check(s.ApplySource(n, Speech("hello")) is null, "duplicate update delivered"); });
 Test("final can upgrade equal revision", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("hello")); s.ApplySource(n, Speech("hello", final:true)); Check(s.Snapshot()[0].IsFinal, "final upgrade lost"); });
 Test("empty correction removes stale display", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("hallucination")); s.ApplySource(n, Speech("", 2)); Check(SubtitleProjection.Compact(s.Snapshot()).Source == "", "empty correction ignored"); });
-Test("expanded punctuation groups aligned tracks", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("你好。", id:"1")); s.ApplyTranslation(n,"1",1,"Hello."); s.ApplySource(n, Speech("再见",id:"2")); var p = SubtitleProjection.Expanded(s.Snapshot()); Check(p.Count == 2 && p[0].Translation == "Hello." && p[1].Source == "再见", "grouping misaligned"); });
+Test("expanded punctuation groups aligned tracks", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("你好。", id:"1", start: 0)); s.ApplyTranslation(n,"1",1,"Hello."); s.ApplySource(n, Speech("再见", id:"2", start: 3000)); var p = SubtitleProjection.Expanded(s.Snapshot()); Check(p.Count == 2 && p[0].Translation == "Hello." && p[1].Source == "再见", "grouping misaligned"); });
 Test("pending history remains visible", () => { var s = new SubtitleStore(); var n = s.BeginSession(); s.ApplySource(n, Speech("pending")); Check(SubtitleProjection.Expanded(s.Snapshot()).Single().Source == "pending", "untranslated history hidden"); });
 Test("latency rejects wrong clock ordering", () => { var stats = new LatencyMonitor(); stats.Record(TimeSpan.FromMilliseconds(-10)); stats.Record(TimeSpan.FromMilliseconds(20)); stats.Record(TimeSpan.FromMilliseconds(40)); Check(stats.Snapshot().Count == 2 && stats.Snapshot().MedianMilliseconds == 30, "latency aggregation incorrect"); });
 Test("audio queue drops oldest under backpressure", () => { var q = new BoundedAudioQueue(2); for(int i=0;i<3;i++)q.Enqueue(new AudioChunk(new[]{(byte)i},TimeSpan.Zero,TimeSpan.Zero,0)); Check(q.Count == 2 && q.DroppedChunks == 1, "audio queue unbounded"); Check(q.TryDequeue(out var first) && first!.Pcm[0] == 1, "oldest not discarded"); });
@@ -94,6 +94,30 @@ Test("deleted provisional segment cannot accept late translation",()=>{
     var s=new SubtitleStore();var n=s.BeginSession();s.ApplySource(n,Speech("obsolete"));s.ApplySource(n,Speech("",2) with{IsDeleted=true});
     Check(s.Snapshot().Count==0&&!s.ApplyTranslation(n,"a",1,"旧"),"deleted row reappeared");
     Check(s.ApplySource(n,Speech("stale",1)) is null&&s.Snapshot().Count==0,"old source recreated deleted row");
+});
+Test("continuous speech joins into single paragraph without newline", () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    s.ApplySource(n, Speech("Hello, how are you?", id: "1", start: 0));
+    s.ApplyTranslation(n, "1", 1, "你好，你好吗？");
+    s.ApplySource(n, Speech("I'm fine, thank you.", id: "2", start: 800));
+    s.ApplyTranslation(n, "2", 1, "我很好，谢谢你。");
+    var p = SubtitleProjection.Expanded(s.Snapshot());
+    Check(p.Count == 1, "continuous speech was split into multiple paragraphs");
+    Check(p[0].Source == "Hello, how are you? I'm fine, thank you.", "English speech not joined with proper space");
+    Check(p[0].Translation == "你好，你好吗？我很好，谢谢你。", "Chinese translation has unwanted space or missing content");
+    Check(!p[0].Source.Contains('\n') && !p[0].Translation.Contains('\n'), "forced newline inserted");
+});
+Test("significant pause separates paragraphs", () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    s.ApplySource(n, Speech("First sentence.", id: "1", start: 0));
+    s.ApplyTranslation(n, "1", 1, "第一句。");
+    s.ApplySource(n, Speech("Second sentence after pause.", id: "2", start: 4000));
+    s.ApplyTranslation(n, "2", 1, "暂停后的第二句。");
+    var p = SubtitleProjection.Expanded(s.Snapshot());
+    Check(p.Count == 2, "pause of 4s should start a new paragraph");
+    Check(p[0].Source == "First sentence." && p[1].Source == "Second sentence after pause.", "paragraph split contents incorrect");
 });
 await TestAsync("pipeline reconnect resumes bounded buffered audio",async()=>{
     var audio=new TestAudioSource();var asr=new ReconnectingAsrProvider();await using var p=new CaptionPipeline(audio,asr,new CountingTranslator(),new(){Translation=new(){DebounceMilliseconds=0}});

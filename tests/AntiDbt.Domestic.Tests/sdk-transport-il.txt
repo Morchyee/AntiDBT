@@ -1,0 +1,210 @@
+System.Net.Http.HttpRequestMessage Tea.TeaCore::GetRequestMessage(Tea.TeaRequest,System.Collections.Generic.Dictionary`2<System.String,System.Object>,System.Int32&)
+IL_0000: ldarg.0
+IL_0001: call System.String Tea.TeaCore::ComposeUrl(Tea.TeaRequest)
+IL_0006: stloc.0
+IL_0007: newobj System.Void System.Net.Http.HttpRequestMessage::.ctor()
+IL_000c: stloc.1
+IL_000d: ldloc.1
+IL_000e: ldarg.0
+IL_000f: callvirt System.String Tea.TeaRequest::get_Method()
+IL_0014: call System.Net.Http.HttpMethod Tea.Utils.HttpUtils::GetHttpMethod(System.String)
+IL_0019: callvirt System.Void System.Net.Http.HttpRequestMessage::set_Method(System.Net.Http.HttpMethod)
+IL_001e: ldloc.1
+IL_001f: ldloc.0
+IL_0020: newobj System.Void System.Uri::.ctor(System.String)
+IL_0025: callvirt System.Void System.Net.Http.HttpRequestMessage::set_RequestUri(System.Uri)
+IL_002a: ldarg.2
+IL_002b: ldc.i4 100000
+IL_0030: stind.i4
+IL_0031: ldarg.1
+IL_0032: ldstr "readTimeout"
+IL_0037: call System.Object Tea.Utils.DictUtils::GetDicValue(System.Collections.Generic.Dictionary`2<System.String,System.Object>,System.String)
+IL_003c: ldc.i4.0
+IL_003d: call System.Int32 Tea.Utils.Extensions::ToSafeInt(System.Object,System.Int32)
+IL_0042: stloc.2
+IL_0043: ldarg.1
+IL_0044: ldstr "connectTimeout"
+IL_0049: call System.Object Tea.Utils.DictUtils::GetDicValue(System.Collections.Generic.Dictionary`2<System.String,System.Object>,System.String)
+IL_004e: ldc.i4.0
+IL_004f: call System.Int32 Tea.Utils.Extensions::ToSafeInt(System.Object,System.Int32)
+IL_0054: stloc.3
+IL_0055: ldloc.2
+IL_0056: brtrue.s IL_005b
+IL_0058: ldloc.3
+IL_0059: brfalse.s IL_0060
+IL_005b: ldarg.2
+IL_005c: ldloc.2
+IL_005d: ldloc.3
+IL_005e: add
+IL_005f: stind.i4
+IL_0060: ldarg.0
+IL_0061: ldfld System.IO.Stream Tea.TeaRequest::Body
+IL_0066: brfalse.s IL_00c7
+IL_0068: newobj System.Void System.IO.MemoryStream::.ctor()
+IL_006d: stloc.s V_4
+IL_006f: ldarg.0
+IL_0070: ldfld System.IO.Stream Tea.TeaRequest::Body
+IL_0075: ldc.i4.0
+IL_0076: conv.i8
+IL_0077: callvirt System.Void System.IO.Stream::set_Position(System.Int64)
+IL_007c: ldc.i4 4096
+IL_0081: newarr System.Byte
+IL_0086: stloc.s V_5
+IL_0088: br.s IL_0096
+IL_008a: ldloc.s V_4
+IL_008c: ldloc.s V_5
+IL_008e: ldc.i4.0
+IL_008f: ldloc.s V_6
+IL_0091: callvirt System.Void System.IO.Stream::Write(System.Byte[],System.Int32,System.Int32)
+IL_0096: ldarg.0
+IL_0097: ldfld System.IO.Stream Tea.TeaRequest::Body
+IL_009c: ldloc.s V_5
+IL_009e: ldc.i4.0
+IL_009f: ldloc.s V_5
+IL_00a1: ldlen
+IL_00a2: conv.i4
+IL_00a3: callvirt System.Int32 System.IO.Stream::Read(System.Byte[],System.Int32,System.Int32)
+IL_00a8: dup
+IL_00a9: stloc.s V_6
+IL_00ab: brtrue.s IL_008a
+IL_00ad: ldloc.s V_4
+IL_00af: ldc.i4.0
+IL_00b0: conv.i8
+IL_00b1: callvirt System.Void System.IO.Stream::set_Position(System.Int64)
+IL_00b6: ldloc.s V_4
+IL_00b8: newobj System.Void System.Net.Http.StreamContent::.ctor(System.IO.Stream)
+IL_00bd: stloc.s V_7
+IL_00bf: ldloc.1
+IL_00c0: ldloc.s V_7
+IL_00c2: callvirt System.Void System.Net.Http.HttpRequestMessage::set_Content(System.Net.Http.HttpContent)
+IL_00c7: ldarg.0
+IL_00c8: callvirt System.Collections.Generic.Dictionary`2<System.String,System.String> Tea.TeaRequest::get_Headers()
+IL_00cd: callvirt System.Collections.Generic.Dictionary`2/Enumerator<!0,!1> System.Collections.Generic.Dictionary`2<System.String,System.String>::GetEnumerator()
+IL_00d2: stloc.s V_8
+IL_00d4: br.s IL_0138
+IL_00d6: ldloca.s V_8
+IL_00d8: call System.Collections.Generic.KeyValuePair`2<!0,!1> System.Collections.Generic.Dictionary`2/Enumerator<System.String,System.String>::get_Current()
+IL_00dd: stloc.s V_9
+IL_00df: ldloc.1
+IL_00e0: callvirt System.Net.Http.Headers.HttpRequestHeaders System.Net.Http.HttpRequestMessage::get_Headers()
+IL_00e5: ldloca.s V_9
+IL_00e7: call !0 System.Collections.Generic.KeyValuePair`2<System.String,System.String>::get_Key()
+IL_00ec: ldloca.s V_9
+IL_00ee: call !1 System.Collections.Generic.KeyValuePair`2<System.String,System.String>::get_Value()
+IL_00f3: callvirt System.Boolean System.Net.Http.Headers.HttpHeaders::TryAddWithoutValidation(System.String,System.String)
+IL_00f8: pop
+IL_00f9: ldloca.s V_9
+IL_00fb: call !0 System.Collections.Generic.KeyValuePair`2<System.String,System.String>::get_Key()
+IL_0100: callvirt System.String System.String::ToLower()
+IL_0105: ldstr "content-"
+IL_010a: callvirt System.Boolean System.String::StartsWith(System.String)
+IL_010f: brfalse.s IL_0138
+IL_0111: ldloc.1
+IL_0112: callvirt System.Net.Http.HttpContent System.Net.Http.HttpRequestMessage::get_Content()
+IL_0117: brfalse.s IL_0138
+IL_0119: ldloc.1
+IL_011a: callvirt System.Net.Http.HttpContent System.Net.Http.HttpRequestMessage::get_Content()
+IL_011f: callvirt System.Net.Http.Headers.HttpContentHeaders System.Net.Http.HttpContent::get_Headers()
+IL_0124: ldloca.s V_9
+IL_0126: call !0 System.Collections.Generic.KeyValuePair`2<System.String,System.String>::get_Key()
+IL_012b: ldloca.s V_9
+IL_012d: call !1 System.Collections.Generic.KeyValuePair`2<System.String,System.String>::get_Value()
+IL_0132: callvirt System.Boolean System.Net.Http.Headers.HttpHeaders::TryAddWithoutValidation(System.String,System.String)
+IL_0137: pop
+IL_0138: ldloca.s V_8
+IL_013a: call System.Boolean System.Collections.Generic.Dictionary`2/Enumerator<System.String,System.String>::MoveNext()
+IL_013f: brtrue.s IL_00d6
+IL_0141: leave.s IL_0151
+IL_0143: ldloca.s V_8
+IL_0145: constrained. System.Collections.Generic.Dictionary`2/Enumerator<System.String,System.String>
+IL_014b: callvirt System.Void System.IDisposable::Dispose()
+IL_0150: endfinally
+IL_0151: ldloc.1
+IL_0152: ret
+System.Net.Http.HttpClient Tea.Utils.HttpClientUtils::CreatHttpClient(System.Collections.Generic.Dictionary`2<System.String,System.Object>)
+IL_0000: ldarg.0
+IL_0001: ldstr "httpProxy"
+IL_0006: ldnull
+IL_0007: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_000c: brtrue.s IL_0022
+IL_000e: ldarg.0
+IL_000f: ldstr "httpsProxy"
+IL_0014: ldnull
+IL_0015: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_001a: ldnull
+IL_001b: call System.String Tea.Utils.Extensions::ToSafeString(System.Object,System.String)
+IL_0020: br.s IL_0034
+IL_0022: ldarg.0
+IL_0023: ldstr "httpProxy"
+IL_0028: ldnull
+IL_0029: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_002e: ldnull
+IL_002f: call System.String Tea.Utils.Extensions::ToSafeString(System.Object,System.String)
+IL_0034: stloc.0
+IL_0035: ldarg.0
+IL_0036: ldstr "ignoreSSL"
+IL_003b: ldnull
+IL_003c: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_0041: ldc.i4.0
+IL_0042: call System.Boolean Tea.Utils.Extensions::ToSafeBool(System.Object,System.Boolean)
+IL_0047: newobj System.Void System.Net.Http.HttpClientHandler::.ctor()
+IL_004c: stloc.1
+IL_004d: ldloc.0
+IL_004e: call System.Boolean System.String::IsNullOrWhiteSpace(System.String)
+IL_0053: brtrue.s IL_0068
+IL_0055: ldloc.1
+IL_0056: ldloc.0
+IL_0057: newobj System.Void System.Uri::.ctor(System.String)
+IL_005c: newobj System.Void System.Net.WebProxy::.ctor(System.Uri)
+IL_0061: callvirt System.Void System.Net.Http.HttpClientHandler::set_Proxy(System.Net.IWebProxy)
+IL_0066: br.s IL_006f
+IL_0068: ldloc.1
+IL_0069: ldc.i4.0
+IL_006a: callvirt System.Void System.Net.Http.HttpClientHandler::set_UseProxy(System.Boolean)
+IL_006f: brfalse.s IL_0098
+IL_0071: ldloc.1
+IL_0072: ldsfld System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean> Tea.Utils.HttpClientUtils/<>c::<>9__6_0
+IL_0077: dup
+IL_0078: brtrue.s IL_0091
+IL_007a: pop
+IL_007b: ldsfld Tea.Utils.HttpClientUtils/<>c Tea.Utils.HttpClientUtils/<>c::<>9
+IL_0080: ldftn System.Boolean Tea.Utils.HttpClientUtils/<>c::<CreatHttpClient>b__6_0(System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors)
+IL_0086: newobj System.Void System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean>::.ctor(System.Object,System.IntPtr)
+IL_008b: dup
+IL_008c: stsfld System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean> Tea.Utils.HttpClientUtils/<>c::<>9__6_0
+IL_0091: callvirt System.Void System.Net.Http.HttpClientHandler::set_ServerCertificateCustomValidationCallback(System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean>)
+IL_0096: br.s IL_00f7
+IL_0098: newobj System.Void Tea.Utils.HttpClientUtils/<>c__DisplayClass6_0::.ctor()
+IL_009d: stloc.2
+IL_009e: ldloc.2
+IL_009f: ldarg.0
+IL_00a0: ldstr "ca"
+IL_00a5: ldnull
+IL_00a6: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_00ab: brtrue.s IL_00c1
+IL_00ad: ldarg.0
+IL_00ae: ldstr "ca"
+IL_00b3: ldnull
+IL_00b4: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_00b9: ldnull
+IL_00ba: call System.String Tea.Utils.Extensions::ToSafeString(System.Object,System.String)
+IL_00bf: br.s IL_00d3
+IL_00c1: ldarg.0
+IL_00c2: ldstr "ca"
+IL_00c7: ldnull
+IL_00c8: call TValue Tea.Utils.Extensions::Get<System.String,System.Object>(System.Collections.Generic.Dictionary`2<TKey,TValue>,TKey,TValue)
+IL_00cd: ldnull
+IL_00ce: call System.String Tea.Utils.Extensions::ToSafeString(System.Object,System.String)
+IL_00d3: stfld System.String Tea.Utils.HttpClientUtils/<>c__DisplayClass6_0::ca
+IL_00d8: ldloc.2
+IL_00d9: ldfld System.String Tea.Utils.HttpClientUtils/<>c__DisplayClass6_0::ca
+IL_00de: call System.Boolean System.String::IsNullOrWhiteSpace(System.String)
+IL_00e3: brtrue.s IL_00f7
+IL_00e5: ldloc.1
+IL_00e6: ldloc.2
+IL_00e7: ldftn System.Boolean Tea.Utils.HttpClientUtils/<>c__DisplayClass6_0::<CreatHttpClient>b__1(System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors)
+IL_00ed: newobj System.Void System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean>::.ctor(System.Object,System.IntPtr)
+IL_00f2: callvirt System.Void System.Net.Http.HttpClientHandler::set_ServerCertificateCustomValidationCallback(System.Func`5<System.Net.Http.HttpRequestMessage,System.Security.Cryptography.X509Certificates.X509Certificate2,System.Security.Cryptography.X509Certificates.X509Chain,System.Net.Security.SslPolicyErrors,System.Boolean>)
+IL_00f7: ldloc.1
+IL_00f8: newobj System.Void System.Net.Http.HttpClient::.ctor(System.Net.Http.HttpMessageHandler)
+IL_00fd: ret

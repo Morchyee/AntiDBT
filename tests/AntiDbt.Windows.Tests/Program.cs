@@ -78,6 +78,22 @@ await Test("phase3-selected-profile-tamper-never-substitutes-other-key",async()=
     var path=Path.Combine(dir,"settings.json");var node=System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;node["Settings"]!["Translation"]!["Provider"]=custom.Provider;node["Settings"]!["Translation"]!["Endpoint"]=custom.Endpoint;await File.WriteAllTextAsync(path,node.ToJsonString());var loaded=await store.LoadAsync();Check(loaded.Translation.ApiKey!="private-deepl-only","cross-profile credential substitution");Check(store.Warning is not null||loaded.Translation.ApiKey==custom.ApiKey,"selected key not from bound profile");
 });
 if (args.Contains("--capture-smoke")) await Test("hardware-capture-smoke", async () => { await using var source = new WasapiAudioSource(); using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(3)); await source.StartAsync(cancel.Token); int bytes = 0; try { await foreach (var chunk in source.ReadChunksAsync(cancel.Token)) bytes += chunk.Pcm.Length; } catch (OperationCanceledException) { } await source.StopAsync(default); Console.WriteLine(JsonSerializer.Serialize(new { captureBytes = bytes, audioPersisted = false })); });
+await Test("phase4-language-theme-consent-and-all-MT-secret-roundtrip",async()=>
+{
+    var directory=Path.Combine(temp,"phase4");var store=new SettingsStore(directory);
+    var profiles=new[]{"VolcengineMachineTranslation","DeepL","AzureTranslator","GoogleTranslationBasic","GroqLlm","OpenAiCompatible","BaiduTranslate","AliyunMT"}.ToDictionary(id=>id,id=>new TranslationConfiguration{Provider=id,Endpoint="https://fixture.invalid/"+id,ApiKey="phase4-synthetic-key-"+id,Secrets=new(){["accessKeyId"]="phase4-synthetic-access-"+id},Options=new(){["public-option"]="retained"}});
+    var settings=new AppSettings{Asr=new(){Provider="GroqWhisper",Language="en",ApiKey="phase4-synthetic-asr"},Translation=profiles["AliyunMT"],TranslationProfiles=profiles,Theme="Light",FallbackEnabled=true,FallbackCostConsent=true,FallbackTranslationProviderId="BaiduTranslate"};
+    settings=LanguageSettings.Select(settings,"zh-Hans","en-GB");await store.SaveAsync(settings);var loaded=await store.LoadAsync();
+    Check(loaded.SourceLanguage=="zh-Hans"&&loaded.Asr.Language=="zh-Hans"&&loaded.TargetLanguage=="en-GB"&&loaded.Theme=="Light"&&loaded.RecentLanguages.Contains("en-GB"),"phase4 preferences not persisted");
+    Check(loaded.FallbackEnabled&&loaded.FallbackCostConsent&&loaded.FallbackTranslationProviderId=="BaiduTranslate","backup opt-in changed");
+    foreach(var profile in profiles)Check(loaded.TranslationProfiles[profile.Key].ApiKey==profile.Value.ApiKey&&loaded.TranslationProfiles[profile.Key].Secrets["accessKeyId"]==profile.Value.Secrets["accessKeyId"],"provider key lost");
+    var publicEnvelope=await File.ReadAllTextAsync(Path.Combine(directory,"settings.json"));Check(!publicEnvelope.Contains("phase4-synthetic"),"phase4 key or AccessKey ID plaintext");
+});
+await Test("phase4-source-upgrade-and-provider-switch-retain-invalid-choice",async()=>
+{
+    var store=new SettingsStore(Path.Combine(temp,"phase4-switch"));var legacy=new AppSettings{Asr=new(){Provider="GroqWhisper",Language="zh-TW",ApiKey="phase4-synthetic-old"},TargetLanguage="en",Translation=new(){Provider="DeepL",Endpoint="https://api-free.deepl.com/v2/translate",ApiKey="phase4-synthetic-mt"}};await store.SaveAsync(legacy);var loaded=await store.LoadAsync();Check(loaded.SourceLanguage=="zh-Hant","legacy source migration");
+    var changed=LanguageSettings.Select(loaded with{Asr=new(){Provider="GoogleCloudSpeech",Language="en-US"}},loaded.SourceLanguage,loaded.TargetLanguage);await store.SaveAsync(changed);var again=await store.LoadAsync();Check(again.SourceLanguage=="zh-Hant"&&again.Asr.Language=="zh-Hant"&&again.Translation.ApiKey==legacy.Translation.ApiKey,"provider switch silently changed selection or key");
+});
 Directory.Delete(temp, true); var artifact = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/windows-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact, JsonSerializer.Serialize(new { failures, hardwareRequested = args.Contains("--capture-smoke"), results }, new JsonSerializerOptions { WriteIndented = true })); return failures == 0 ? 0 : 1;
 
 sealed class SyntheticSource : PcmAudioSource

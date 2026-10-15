@@ -26,8 +26,8 @@ public sealed class VolcengineMachineTranslationProvider : ITranslationProvider
         using var message = new HttpRequestMessage(HttpMethod.Post, uri);
         foreach (var header in headers)
             message.Headers.Add(header.Key, header.Value);
-        var source = NormalizeLanguage(request.SourceLanguage);
-        var target = NormalizeLanguage(request.TargetLanguage);
+        var source = ProviderLanguages.MtSourceCode(config,request.SourceLanguage);
+        var target = ProviderLanguages.MtTargetCode(config,request.TargetLanguage);
         if (target.Length == 0)
             throw new ArgumentException("请选择目标语言。");
         var body = new Dictionary<string, object> { ["target_language"] = target, ["text_list"] = new[] { request.Text } };
@@ -40,7 +40,7 @@ public sealed class VolcengineMachineTranslationProvider : ITranslationProvider
         {
             using var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException($"翻译服务 HTTP 错误 ({(int)response.StatusCode})。");
+                throw ProviderHttp.Failure(ProviderHttp.Classify(response.StatusCode,[]));
             using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
             using var buffer = new MemoryStream();
             var bytes = new byte[8192];
@@ -48,30 +48,23 @@ public sealed class VolcengineMachineTranslationProvider : ITranslationProvider
             while ((count = await stream.ReadAsync(bytes, timeout.Token)) > 0)
             {
                 if (buffer.Length + count > 4 * 1024 * 1024)
-                    throw new InvalidOperationException("翻译服务响应过大。");
+                    throw ProviderHttp.Failure(ProviderErrorKind.InvalidResponse);
                 buffer.Write(bytes, 0, count);
             }
             using var json = JsonDocument.Parse(buffer.ToArray());
             var root = json.RootElement;
             if (!root.TryGetProperty("code", out var code) || !code.TryGetInt32(out var value) || value != 20000000)
-                throw new InvalidOperationException("翻译服务返回业务错误。");
+                throw ProviderHttp.Failure(ProviderErrorKind.InvalidResponse);
             var list = root.GetProperty("data").GetProperty("translation_list");
             if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() != 1)
                 throw new JsonException();
             return list[0].GetProperty("translation").GetString() ?? throw new JsonException();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) { throw new TimeoutException("翻译服务请求超时。"); }
-        catch (HttpRequestException) { throw new InvalidOperationException("翻译服务连接失败。"); }
-        catch (Exception e) when (e is JsonException or KeyNotFoundException || e is InvalidOperationException && !e.Message.StartsWith("翻译服务")) { throw new InvalidOperationException("翻译服务响应格式无效。"); }
+        catch (OperationCanceledException) { throw ProviderHttp.Failure(ProviderErrorKind.Timeout); }
+        catch (HttpRequestException) { throw ProviderHttp.Failure(ProviderErrorKind.Network); }
+        catch (IOException) { throw ProviderHttp.Failure(ProviderErrorKind.Network); }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { throw ProviderHttp.Failure(ProviderErrorKind.InvalidResponse); }
     }
-    private static string NormalizeLanguage(string language) => language.Trim().ToLowerInvariant() switch
-    {
-        "" or "auto" => "",
-        "en-us" or "en-gb" => "en",
-        "zh-cn" or "zh-hans" or "zh-hans-cn" => "zh",
-        "zh-tw" or "zh-hant" => "zh-Hant",
-        _ => language.Trim()
-    };
 }
 

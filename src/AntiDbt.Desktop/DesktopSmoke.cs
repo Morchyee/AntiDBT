@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -25,6 +26,7 @@ internal static class DesktopSmoke
         }
         try
         {
+            if (directory.Contains("ui-red", StringComparison.OrdinalIgnoreCase)) await Phase4DesktopSmoke.BaselineWheelAsync(directory);
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             var store = window.TestStore;
@@ -33,14 +35,14 @@ internal static class DesktopSmoke
             await Task.Delay(150);
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             Check("source visible before translation", window.TestSource.Contains("original immediately"));
-            Check("pending translation placeholder", window.TestTarget == "等待译文…");
+            Check("pending translation placeholder removed", window.TestTarget == "" || !window.TestTarget.Contains("等待译文"));
             Capture(window, Path.Combine(directory, "desktop-source-pending.png"));
             store.ApplyTranslation(generation, "1", 1, "实时字幕立即显示原文。");
             await Task.Delay(100);
             Check("translation visible", window.TestTarget.Contains("立即显示"));
             store.ApplySource(generation, new("1", 2, "Live subtitles revise the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
             await Task.Delay(100);
-            Check("revision replaces source and labels retained draft", window.TestSource.Contains("revise") && window.TestTarget.Contains("待更新"));
+            Check("revision replaces source and retains draft without placeholder", window.TestSource.Contains("revise") && window.TestTarget.Contains("立即显示") && !window.TestTarget.Contains("待更新"));
             store.ApplyTranslation(generation, "1", 2, "实时字幕立即修正原文。");
             await Task.Delay(100);
             Capture(window, Path.Combine(directory, "desktop-compact.png"));
@@ -51,30 +53,109 @@ internal static class DesktopSmoke
             store.ApplySource(generation, new("1", 4, "Live subtitles revise the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
             store.ApplyTranslation(generation, "1", 4, "实时字幕立即修正原文。");
             await Task.Delay(100);
+
+            // Verify continuous speech merges into single paragraph without forced newline
+            var contStore = new SubtitleStore();
+            var contGen = contStore.BeginSession();
+            contStore.ApplySource(contGen, new("c1", 1, "Hello, how are you?", true, TimeSpan.Zero, TimeSpan.FromSeconds(1), "en"));
+            contStore.ApplyTranslation(contGen, "c1", 1, "你好，你好吗？");
+            contStore.ApplySource(contGen, new("c2", 1, "I'm fine, thank you.", true, TimeSpan.FromMilliseconds(1200), TimeSpan.FromSeconds(2), "en"));
+            contStore.ApplyTranslation(contGen, "c2", 1, "我很好，谢谢你。");
+            var contParagraphs = SubtitleProjection.Expanded(contStore.Snapshot());
+            Check("continuous speech merged into single paragraph without forced newline", contParagraphs.Count == 1 && contParagraphs[0].Source == "Hello, how are you? I'm fine, thank you." && contParagraphs[0].Translation == "你好，你好吗？我很好，谢谢你。");
+
             for (int i = 2; i < 50; i++)
             {
-                store.ApplySource(generation, new(i.ToString(), 1, $"History sentence {i}.", true, TimeSpan.FromSeconds(i), TimeSpan.FromSeconds(i + 1), "en"));
+                store.ApplySource(generation, new(i.ToString(), 1, $"History sentence {i}.", true, TimeSpan.FromSeconds(i * 4), TimeSpan.FromSeconds(i * 4 + 1), "en"));
                 store.ApplyTranslation(generation, i.ToString(), 1, $"历史字幕第 {i} 句。");
             }
             window.SetExpanded(true);
             await Task.Delay(150);
             Check("expanded history bound", window.TestHistoryCount == 49);
+            Check("resize mode is clean CanResize without grip", window.ResizeMode == ResizeMode.CanResize);
+            Check("scrollbar style registered in window resources", window.TryFindResource(typeof(ScrollBar)) is not null);
             Capture(window, Path.Combine(directory, "desktop-expanded.png"));
             var scroller = window.TestScroller ?? throw new InvalidOperationException("history scroll viewer missing");
             scroller.ScrollToTop();
             await Task.Delay(150);
             Check("manual upscroll suspends follow", !window.TestFollowing);
-            store.ApplySource(generation, new("50", 1, "New sentence while reading history.", true, TimeSpan.FromSeconds(50), TimeSpan.FromSeconds(51), "en"));
+            store.ApplySource(generation, new("50", 1, "New sentence while reading history.", true, TimeSpan.FromSeconds(50 * 4), TimeSpan.FromSeconds(50 * 4 + 1), "en"));
             await Task.Delay(150);
             Check("new subtitle preserves manual history position", !window.TestFollowing && scroller.VerticalOffset < 3);
             scroller.ScrollToBottom();
             await Task.Delay(150);
             Check("returning to bottom resumes follow", window.TestFollowing);
+
+            // Verify compact mode scrolling works and does not resize window
+            window.SetExpanded(false);
+            await Task.Delay(150);
+            Check("compact mode scroller active", window.TestScroller is not null);
+            var compScroller = window.TestScroller!;
+            compScroller.ScrollToTop();
+            await Task.Delay(150);
+            Check("compact mode upscroll suspends follow", !window.TestFollowing);
+            compScroller.ScrollToBottom();
+            await Task.Delay(150);
+            Check("compact mode returning to bottom resumes follow", window.TestFollowing);
+
+            // Phase 5.2: Test adaptive window resizing and history space utilization
+            window.SetExpanded(true);
+            window.TestSetUserResized(true);
+            window.Height = 650;
+            window.Width = 900;
+            await Task.Delay(150);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            Check("history stretches to fill available window height without empty void", window.TestHistory.ActualHeight > 500);
+            Check("bottom button overlays at bottom-right", window.TestBottomButton.VerticalAlignment == VerticalAlignment.Bottom && window.TestBottomButton.HorizontalAlignment == HorizontalAlignment.Right);
+            Capture(window, Path.Combine(directory, "desktop-stretched-tall.png"));
+
+            // Test window stretched wide
+            window.Width = 1100;
+            window.Height = 450;
+            await Task.Delay(150);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            Check("window adapts to wide layout", window.TestHistory.ActualWidth > 1000);
+            Capture(window, Path.Combine(directory, "desktop-stretched-wide.png"));
+
+            // Reset to default size
+            window.Width = 680;
+            window.SetExpanded(false);
+
             var settings = new SettingsWindow(ProviderCatalog.DefaultSettings()) { Owner = window };
             settings.Show();
             await Task.Delay(150);
             Check("settings window renders", settings.ActualHeight > 0 && settings.ActualWidth > 0);
             Capture(settings, Path.Combine(directory, "desktop-settings.png"));
+
+            // Phase 5.2: Test background opacity slider and real-time live preview
+            Check("opacity slider present", settings.TestOpacitySlider is not null);
+            var initialOpacity = settings.TestOpacitySlider!.Value;
+            Check("default opacity is 80%", Math.Abs(initialOpacity - 80) < 0.1);
+
+            // Test live opacity preview
+            settings.TestOpacity(50);
+            await Task.Delay(50);
+            var surfaceBrush50 = (SolidColorBrush)window.Resources["Surface"];
+            Check("live opacity 50% reflects in surface alpha", Math.Abs(surfaceBrush50.Color.A - 128) <= 2);
+            Capture(window, Path.Combine(directory, "desktop-opacity-50pct.png"));
+
+            settings.TestOpacity(20);
+            await Task.Delay(50);
+            var surfaceBrush20 = (SolidColorBrush)window.Resources["Surface"];
+            Check("live opacity 20% reflects in surface alpha", Math.Abs(surfaceBrush20.Color.A - 51) <= 2);
+            Capture(window, Path.Combine(directory, "desktop-opacity-20pct.png"));
+
+            // Test opacity 0% clamping to alpha 1 (hit-testing safe, no click-through)
+            settings.TestOpacity(0);
+            await Task.Delay(50);
+            var surfaceBrush0 = (SolidColorBrush)window.Resources["Surface"];
+            Check("opacity 0% maintains minimum alpha 1 to prevent click-through", surfaceBrush0.Color.A == 1);
+
+            // Restore to 80% and save
+            settings.TestOpacity(80);
+            await Task.Delay(50);
+            Capture(window, Path.Combine(directory, "desktop-opacity-80pct.png"));
+
             var asrEditor = settings.TestAsr; var mtEditor = settings.TestTranslation;
             asrEditor.Set("ApiKey", "synthetic-asr");
             mtEditor.Select("DeepL"); mtEditor.Set("ApiKey", "synthetic-mt");
@@ -104,8 +185,10 @@ internal static class DesktopSmoke
             mtEditor.Select("OpenAiCompatible");
             settings.TestSave();
             Check("saved result preserves destination and cleared credential", settings.Result.Translation.Endpoint == "https://vendor-b.example/v1" && settings.Result.Translation.ApiKey == "" && settings.Result.TranslationProfiles["DeepL"].ApiKey == "synthetic-mt");
+            Check("saved settings includes background opacity", Math.Abs(settings.Result.BackgroundOpacity - 0.80) < 0.01);
             var restored = new SettingsWindow(settings.Result);
             Check("saved profile reopening retains credential deletion", restored.TestTranslation.Get("ApiKey") == "" && restored.TestTranslation.Get("Endpoint") == "https://vendor-b.example/v1");
+            Check("reopened settings retains background opacity", Math.Abs(restored.TestOpacitySlider!.Value - 80) < 0.1);
             restored.Close();
             var dialogToken = settings.TestLifetimeToken;
             settings.Close();
@@ -114,8 +197,9 @@ internal static class DesktopSmoke
             await window.StartDemoAsync();
             await Task.Delay(2800);
             Check("demo pipeline updates source", window.TestSource.Contains("Live subtitles"));
+            await Phase4DesktopSmoke.RunAsync(window, directory, Check);
         }
-        finally { await File.WriteAllTextAsync(Path.Combine(directory, "desktop-smoke.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.Now, results }, new JsonSerializerOptions { WriteIndented = true })); window.Close(); }
+        finally { await File.WriteAllTextAsync(Path.Combine(directory, "desktop-smoke.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.Now, results }, new JsonSerializerOptions { WriteIndented = true })); await window.CloseAsync(); }
     }
     static void Capture(Window window, string path)
     {
@@ -128,3 +212,5 @@ internal static class DesktopSmoke
         encoder.Save(stream);
     }
 }
+
+

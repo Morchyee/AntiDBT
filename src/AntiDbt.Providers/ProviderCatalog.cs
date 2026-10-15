@@ -26,15 +26,30 @@ public static class ProviderCatalog
             }
         }
     };
-    public static IAsrProvider CreateAsr(AsrConfiguration config) => config.Provider switch
+    public static IAsrProvider CreateAsr(AsrConfiguration config) => new LanguageAwareAsrProvider(config.Provider switch
     {
         "VolcengineAsr2"=>new VolcengineAsrProvider(),
         "GroqWhisper"=>new GroqWhisperProvider(),
         "AzureSpeech"=>new AntiDbt.CloudSpeech.AzureSpeechProvider(),
         "GoogleCloudSpeech"=>new AntiDbt.CloudSpeech.GoogleSpeechProvider(),
         _=>throw new NotSupportedException("所选语音服务尚未支持；LiveInterpret 国内协议仍待验证。")
-    };
-    public static ITranslationProvider CreateTranslator(TranslationConfiguration config) => config.Provider == "VolcengineMachineTranslation" ? new VolcengineMachineTranslationProvider(config) : new HttpTranslationProvider(config);
+    });
+    public static ITranslationProvider CreateTranslator(TranslationConfiguration config) => new ValidatedTranslationProvider(config,config.Provider switch
+    {
+        "VolcengineMachineTranslation"=>new VolcengineMachineTranslationProvider(config),
+        "BaiduTranslate"=>new BaiduTranslationProvider(config),
+        "AliyunMT"=>new AliyunTranslationProvider(config),
+        _=>new HttpTranslationProvider(config)
+    });
+    public static ITranslationProvider CreateTranslator(AppSettings settings)
+    {
+        settings=LanguageSettings.Upgrade(settings);
+        if(LanguageRegistry.Same(settings.SourceLanguage,settings.TargetLanguage))return new PassthroughTranslationProvider();
+        var primary=CreateTranslator(settings.Translation);
+        if(!settings.FallbackEnabled)return primary;
+        if(!settings.FallbackCostConsent||settings.FallbackTranslationProviderId==settings.Translation.Provider||!settings.TranslationProfiles.TryGetValue(settings.FallbackTranslationProviderId,out var backup))throw ProviderHttp.Failure(ProviderErrorKind.Configuration);
+        return new FallbackTranslationProvider(primary,CreateTranslator(backup));
+    }
 }
 
 internal static class ProviderConfiguration
