@@ -6,9 +6,12 @@ public sealed class TranslationScheduler : IAsyncDisposable
     {
         public CaptionSegment Latest = latest;
         public CancellationTokenSource Cancellation = new();
+        public CancellationTokenSource? Attempt;
     }
     readonly SubtitleStore store; readonly ITranslationProvider provider; readonly TranslationConfiguration settings; readonly string target;
-    readonly object sync = new(); readonly SemaphoreSlim slots = new(2);
+    readonly object sync = new();
+    readonly List<(Job Job, TaskCompletionSource Ready)> waiting = new();
+    int activeSlots;
     readonly Dictionary<(long, string), Job> jobs = new(); readonly HashSet<Task> tasks = new(); readonly Dictionary<string, string> cache = new();
     bool disposed;
     int outstandingRequests;
@@ -34,7 +37,9 @@ public sealed class TranslationScheduler : IAsyncDisposable
             }
             if (jobs.TryGetValue(key, out var current))
             {
+                bool preempt = segment.IsFinal && (!current.Latest.IsFinal || segment.Revision != current.Latest.Revision);
                 current.Latest = segment;
+                if (preempt) current.Attempt?.Cancel();
                 return;
             }
             if (jobs.Count >= 128)
@@ -59,71 +64,85 @@ public sealed class TranslationScheduler : IAsyncDisposable
         {
             while (true)
             {
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
                 lock (sync)
+                {
                     segment = job.Latest;
-                // A fixed coalescing window never restarts on each incoming interim event.
-                if (!segment.IsFinal)
-                    await Task.Delay(Math.Clamp(settings.DebounceMilliseconds, 0, 2000), token);
-                await slots.WaitAsync(token);
+                    job.Attempt = attempt;
+                }
                 try
                 {
-                    lock (sync)
-                        segment = job.Latest;
-                    var context = store.Snapshot().Where(x => x.SessionId == segment.SessionId && x.IsFinal && x.ReceivedTimestamp < segment.ReceivedTimestamp && x.SegmentId != segment.SegmentId)
-                        .TakeLast(Math.Clamp(settings.ContextSentences, 0, 12)).Select(x => x.SourceText).ToArray();
-                    var key = segment.Language + "\0" + target + "\0" + segment.SourceText + "\0" + string.Join("\u001f", context);
-                    string? text;
-                    lock (sync)
-                        cache.TryGetValue(key, out text);
-                    if (text is null)
+                    // A fixed coalescing window never restarts on each incoming interim event.
+                    if (!segment.IsFinal)
+                        await Task.Delay(Math.Clamp(settings.DebounceMilliseconds, 0, 2000), attempt.Token);
+                    await AcquireSlotAsync(job, attempt.Token);
+                    try
                     {
-                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-                        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(settings.TimeoutSeconds, 1, 120)));
-                        var began = Stopwatch.GetTimestamp();
-                        if (Interlocked.Increment(ref outstandingRequests) > 16)
-                        {
-                            Interlocked.Decrement(ref outstandingRequests);
-                            throw new IOException("Translation plugin did not release requests.");
-                        }
-                        Task<string> request;
-                        try
-                        {
-                            request = provider.TranslateAsync(new(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, segment.Language, target, context), deadline.Token);
-                        }
-                        catch { Interlocked.Decrement(ref outstandingRequests); throw; }
-                        _ = request.ContinueWith(t => { Interlocked.Decrement(ref outstandingRequests); if (t.IsFaulted) _ = t.Exception; }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                        text = await request.WaitAsync(deadline.Token);
-                        RequestLatency.Record(Stopwatch.GetElapsedTime(began));
-                        token.ThrowIfCancellationRequested();
                         lock (sync)
                         {
-                            if (cache.Count >= 128)
-                                cache.Remove(cache.Keys.First());
-                            cache[key] = text;
+                            attempt.Token.ThrowIfCancellationRequested();
+                            segment = job.Latest;
                         }
+                        var context = store.Snapshot().Where(x => x.SessionId == segment.SessionId && x.IsFinal && x.ReceivedTimestamp < segment.ReceivedTimestamp && x.SegmentId != segment.SegmentId)
+                            .TakeLast(Math.Clamp(settings.ContextSentences, 0, 12)).Select(x => x.SourceText).ToArray();
+                        var key = segment.Language + "\0" + target + "\0" + segment.SourceText + "\0" + string.Join("\u001f", context);
+                        string? text;
+                        lock (sync)
+                            cache.TryGetValue(key, out text);
+                        if (text is null)
+                        {
+                            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
+                            deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(settings.TimeoutSeconds, 1, 120)));
+                            var began = Stopwatch.GetTimestamp();
+                            if (Interlocked.Increment(ref outstandingRequests) > 16)
+                            {
+                                Interlocked.Decrement(ref outstandingRequests);
+                                throw new IOException("Translation plugin did not release requests.");
+                            }
+                            Task<string> request;
+                            try
+                            {
+                                request = provider.TranslateAsync(new(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, segment.Language, target, context), deadline.Token);
+                            }
+                            catch { Interlocked.Decrement(ref outstandingRequests); throw; }
+                            _ = request.ContinueWith(t => { Interlocked.Decrement(ref outstandingRequests); if (t.IsFaulted) _ = t.Exception; }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                            text = await request.WaitAsync(deadline.Token);
+                            RequestLatency.Record(Stopwatch.GetElapsedTime(began));
+                            attempt.Token.ThrowIfCancellationRequested();
+                            lock (sync)
+                            {
+                                if (cache.Count >= 128)
+                                    cache.Remove(cache.Keys.First());
+                                cache[key] = text;
+                            }
+                        }
+                        attempt.Token.ThrowIfCancellationRequested();
+                        if (!store.ApplyTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text))
+                            store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text);
                     }
-                    token.ThrowIfCancellationRequested();
-                    if (!store.ApplyTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text))
-                        store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text);
+                    catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested) { }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
+                            Error?.Invoke("翻译请求超时，请检查服务或重试");
+                    }
+                    catch (ProviderException error) when (!token.IsCancellationRequested)
+                    {
+                        if(store.ApplyTranslationError(segment.SessionId,segment.SegmentId,segment.Revision,error.Message))Error?.Invoke(error.Message);
+                    }
+                    catch (Exception) when (!token.IsCancellationRequested)
+                    {
+                        if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译服务调用失败"))
+                            Error?.Invoke("翻译服务调用失败，请检查密钥、权限、配额和网络");
+                    }
+                    finally { ReleaseSlot(); }
                 }
-                catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                {
-                    if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
-                        Error?.Invoke("翻译请求超时，请检查服务或重试");
-                }
-                catch (ProviderException error) when (!token.IsCancellationRequested)
-                {
-                    if(store.ApplyTranslationError(segment.SessionId,segment.SegmentId,segment.Revision,error.Message))Error?.Invoke(error.Message);
-                }
-                catch (Exception) when (!token.IsCancellationRequested)
-                {
-                    if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译服务调用失败"))
-                        Error?.Invoke("翻译服务调用失败，请检查密钥、权限、配额和网络");
-                }
-                finally { slots.Release(); }
+                catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested) { }
+                finally { lock (sync) job.Attempt = null; }
+                token.ThrowIfCancellationRequested();
                 lock (sync)
                 {
-                    if (job.Latest.Revision == segment.Revision)
+                    if (!attempt.IsCancellationRequested && job.Latest.Revision == segment.Revision && job.Latest.IsFinal == segment.IsFinal)
                     {
                         var key = (segment.SessionId, segment.SegmentId);
                         if (jobs.TryGetValue(key, out var active) && ReferenceEquals(active, job))
@@ -152,6 +171,36 @@ public sealed class TranslationScheduler : IAsyncDisposable
                     jobs.Remove(key);
                 job.Cancellation.Dispose();
             }
+        }
+    }
+    async Task AcquireSlotAsync(Job job, CancellationToken token)
+    {
+        TaskCompletionSource ready;
+        lock (sync)
+        {
+            token.ThrowIfCancellationRequested();
+            if (activeSlots < 2 && waiting.Count == 0) { activeSlots++; return; }
+            ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            waiting.Add((job, ready));
+        }
+        try { await ready.Task.WaitAsync(token); }
+        catch
+        {
+            bool granted;
+            lock (sync) granted = waiting.RemoveAll(x => ReferenceEquals(x.Ready, ready)) == 0;
+            if (granted) ReleaseSlot();
+            throw;
+        }
+    }
+    void ReleaseSlot()
+    {
+        lock (sync)
+        {
+            if (waiting.Count == 0) { activeSlots--; return; }
+            int index = waiting.FindIndex(x => x.Job.Latest.IsFinal);
+            if (index < 0) index = 0;
+            var next = waiting[index]; waiting.RemoveAt(index);
+            next.Ready.TrySetResult();
         }
     }
     public void CancelSegment(long session, string id)
@@ -191,7 +240,6 @@ public sealed class TranslationScheduler : IAsyncDisposable
         try
         {
             await FlushAsync(timeout.Token);
-            slots.Dispose();
         }
         catch (OperationCanceledException) { }
     }

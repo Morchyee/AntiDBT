@@ -204,6 +204,7 @@ public sealed class MainWindow : Window
         if (dialog.ShowDialog() == true)
         {
             settings = dialog.Result;
+            store.BeginSession();
             Topmost = settings.Topmost;
             Render();
             if (await SaveSettingsAsync())
@@ -217,14 +218,13 @@ public sealed class MainWindow : Window
             await StopCaptureCoreAsync();
             return;
         }
-        if (!HasCredentials(settings.Asr.ApiKey, settings.Asr.Options, settings.Asr.Secrets) || !HasCredentials(settings.Translation.ApiKey, settings.Translation.Options, settings.Translation.Secrets))
+        if (ProviderDescriptors.Validate(settings.Asr) is not null || ProviderDescriptors.Validate(settings.Translation) is not null)
         {
             await OpenSettingsCoreAsync();
             return;
         }
         await StartPipelineAsync(new WasapiAudioSource(settings.AudioDeviceId), ProviderCatalog.CreateAsr(settings.Asr), ProviderCatalog.CreateTranslator(settings.Translation));
     });
-    static bool HasCredentials(string key, Dictionary<string, string> options, Dictionary<string, string> secrets) => !string.IsNullOrWhiteSpace(key) || (!string.IsNullOrWhiteSpace(options.GetValueOrDefault("appId")) && !string.IsNullOrWhiteSpace(secrets.GetValueOrDefault("accessKey")));
     async Task StartPipelineAsync(IAudioSource audio, IAsrProvider asr, ITranslationProvider translator)
     {
         if (pipeline is not null)

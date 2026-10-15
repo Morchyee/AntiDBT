@@ -26,8 +26,15 @@ public static class ProviderCatalog
             }
         }
     };
-    public static IAsrProvider CreateAsr(AsrConfiguration config) => config.Provider == "VolcengineAsr2" ? new VolcengineAsrProvider() : throw new NotSupportedException("所选语音服务尚未支持；LiveInterpret 国内协议仍待验证。");
-    public static ITranslationProvider CreateTranslator(TranslationConfiguration config) => config.Provider == "VolcengineMachineTranslation" ? new VolcengineMachineTranslationProvider(config) : throw new NotSupportedException("所选翻译服务尚未支持。");
+    public static IAsrProvider CreateAsr(AsrConfiguration config) => config.Provider switch
+    {
+        "VolcengineAsr2"=>new VolcengineAsrProvider(),
+        "GroqWhisper"=>new GroqWhisperProvider(),
+        "AzureSpeech"=>new AntiDbt.CloudSpeech.AzureSpeechProvider(),
+        "GoogleCloudSpeech"=>new AntiDbt.CloudSpeech.GoogleSpeechProvider(),
+        _=>throw new NotSupportedException("所选语音服务尚未支持；LiveInterpret 国内协议仍待验证。")
+    };
+    public static ITranslationProvider CreateTranslator(TranslationConfiguration config) => config.Provider == "VolcengineMachineTranslation" ? new VolcengineMachineTranslationProvider(config) : new HttpTranslationProvider(config);
 }
 
 internal static class ProviderConfiguration

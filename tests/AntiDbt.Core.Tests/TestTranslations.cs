@@ -14,3 +14,6 @@ sealed class ControlledTranslator : ITranslationProvider
     public async Task WaitForCountAsync(int count)
     { using var c=new CancellationTokenSource(TimeSpan.FromSeconds(3));for(;;){lock(_requests)if(_requests.Count>=count)return;await Task.Delay(5,c.Token);} }
 }
+
+sealed class BarrierTranslator(Func<TranslationRequest,CancellationToken,Task<string>> run):ITranslationProvider
+{ public Task<string> TranslateAsync(TranslationRequest request,CancellationToken token)=>run(request,token); }

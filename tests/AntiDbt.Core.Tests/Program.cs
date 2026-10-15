@@ -122,6 +122,45 @@ await TestAsync("zero audio suppression threshold and nonzero recovery",async()=
     for(int i=0;i<6;i++)source.PushSilence();source.Push();source.Finish();await p.StartAsync();await p.Completion.WaitAsync(TimeSpan.FromSeconds(4));
     Check(p.Store.Snapshot().Single().SourceText=="word6","zero threshold or nonzero resume incorrect");
 });
+
+await TestAsync("Final preempts uncooperative preview before release",async()=>{
+    var s=new SubtitleStore();var n=s.BeginSession();var p=new ControlledTranslator();
+    await using var scheduler=new TranslationScheduler(s,p,new(){DebounceMilliseconds=0},"zh");
+    scheduler.Schedule(s.ApplySource(n,Speech("partial"))!);await p.WaitForCountAsync(1);
+    scheduler.Schedule(s.ApplySource(n,Speech("final",2,final:true))!);
+    try{await p.WaitForCountAsync(2);p.Complete(1,"最终");await scheduler.FlushAsync(CancellationToken.None);Check(s.Snapshot().Single().TranslationText=="最终","Final missing");}
+    finally{p.Complete(0,"obsolete");}
+});
+await TestAsync("Final wakes fixed debounce",async()=>{
+    var s=new SubtitleStore();var n=s.BeginSession();var started=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var p=new BarrierTranslator((r,t)=>{started.TrySetResult();return Task.FromResult("final");});
+    await using var scheduler=new TranslationScheduler(s,p,new(){DebounceMilliseconds=2000},"zh");
+    scheduler.Schedule(s.ApplySource(n,Speech("partial"))!);await Task.Delay(100);
+    scheduler.Schedule(s.ApplySource(n,Speech("final",2,final:true))!);
+    await started.Task.WaitAsync(TimeSpan.FromMilliseconds(600));await scheduler.FlushAsync(CancellationToken.None);
+});
+await TestAsync("queued Final gets released slot before queued previews",async()=>{
+    var s=new SubtitleStore();var n=s.BeginSession();var entered=new List<string>();
+    var started=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var next=new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var release=new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var other=new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var p=new BarrierTranslator((r,t)=>{lock(entered){entered.Add(r.SegmentId);if(entered.Count==2)started.TrySetResult();if(entered.Count==3)next.TrySetResult(r.SegmentId);}return r.SegmentId=="1"?release.Task:r.SegmentId=="2"?other.Task:Task.FromResult("ok");});
+    await using var scheduler=new TranslationScheduler(s,p,new(){DebounceMilliseconds=0},"zh");
+    scheduler.Schedule(s.ApplySource(n,Speech("block1",id:"1",final:true))!);scheduler.Schedule(s.ApplySource(n,Speech("block2",id:"2",final:true))!);await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    scheduler.Schedule(s.ApplySource(n,Speech("preview",id:"3"))!);await Task.Delay(100);
+    scheduler.Schedule(s.ApplySource(n,Speech("final",id:"4",final:true))!);await Task.Delay(100);release.TrySetResult("ok");
+    try{Check(await next.Task.WaitAsync(TimeSpan.FromSeconds(2))=="4","preview took Final slot");}finally{other.TrySetResult("ok");}
+    await scheduler.FlushAsync(CancellationToken.None);
+});
+
+await TestAsync("same revision Final upgrade preempts preview",async()=>{
+    var s=new SubtitleStore();var n=s.BeginSession();var p=new ControlledTranslator();
+    await using var scheduler=new TranslationScheduler(s,p,new(){DebounceMilliseconds=0},"zh");
+    scheduler.Schedule(s.ApplySource(n,Speech("same text"))!);await p.WaitForCountAsync(1);
+    scheduler.Schedule(s.ApplySource(n,Speech("same text",final:true))!);
+    try{await p.WaitForCountAsync(2);p.Complete(1,"final");await scheduler.FlushAsync(CancellationToken.None);Check(s.Snapshot().Single().TranslationText=="final","same revision Final dropped");}
+    finally{p.Complete(0,"obsolete");}
+});
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

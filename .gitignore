@@ -2,6 +2,7 @@
 **/obj/
 .packages/
 .dotnet-home/
+.dotnet/
 artifacts/
 data/
 *.user
