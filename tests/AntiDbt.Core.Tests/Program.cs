@@ -129,6 +129,11 @@ await TestAsync("ordinary stop preserves delayed final within drain budget",asyn
     await p.StartAsync();audio.Push();await Task.Delay(50);await p.StopAsync().WaitAsync(TimeSpan.FromSeconds(7));
     Check(p.Store.Snapshot().Single().SourceText=="delayed final"&&p.Store.Snapshot().Single().TranslationText=="译:delayed final","stop truncated final");
 });
+await TestAsync("reconfigure stop immediately isolates session and skips delayed final",async()=>{
+    var audio=new TestAudioSource();await using var p=new CaptionPipeline(audio,new DelayedFinalAsr(),new CountingTranslator(),new(){Translation=new(){DebounceMilliseconds=0}});
+    await p.StartAsync();audio.Push();await Task.Delay(50);await p.StopAsync(StopReason.Reconfigure).WaitAsync(TimeSpan.FromSeconds(3));
+    Check(p.Store.Snapshot().Count==0,"reconfigure stop leaked delayed final into store");
+});
 await TestAsync("pipeline resource disposal can retry after failure",async()=>{
     var source=new DisposalAudio(true);var p=new CaptionPipeline(source,new TestAsrProvider(),new CountingTranslator(),new());await p.StartAsync();
     try{await p.DisposeAsync();throw new Exception("expected failure");}catch(IOException){}

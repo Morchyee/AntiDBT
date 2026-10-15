@@ -25,7 +25,7 @@ public sealed class MainWindow : Window
     double historyFont;
     bool historyShowSource;
     CaptionPipeline? pipeline;
-    bool busy, closing, allowClose, expanded, follow = true, renderQueued, userResized;
+    bool busy, closing, allowClose, expanded, follow = true, renderQueued, userResized, pipelineCleanupFailed;
 
     readonly TextBox source = CaptionText(new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)));
     readonly TextBox target = CaptionText(Brushes.White);
@@ -464,9 +464,10 @@ public sealed class MainWindow : Window
         {
             await action();
         }
-        catch
+        catch (Exception ex)
         {
-            SetStatus("操作失败，请检查音频资源或服务配置后重试", PipelineState.Error);
+            if (string.IsNullOrEmpty(statusMessage) || (!statusMessage.Contains("禁止") && !statusMessage.Contains("无法释放")))
+                SetStatus(ex.Message.Length > 0 && ex is InvalidOperationException ? ex.Message : "操作失败，请检查音频资源或服务配置后重试", PipelineState.Error);
             start.Content = "重试";
         }
         finally
@@ -508,7 +509,7 @@ public sealed class MainWindow : Window
     {
         if (pipeline is not null && !pipeline.Completion.IsCompleted)
         {
-            await StopCaptureCoreAsync();
+            await StopCaptureCoreAsync(StopReason.UserStop);
             return;
         }
         if (ProviderLanguages.ValidateSettings(settings) is { } validation)
@@ -523,13 +524,38 @@ public sealed class MainWindow : Window
     async Task StartPipelineAsync(IAudioSource audio, IAsrProvider asr, ITranslationProvider translator)
     {
         if (pipeline is not null)
-            await pipeline.DisposeAsync();
+        {
+            if (pipelineCleanupFailed)
+            {
+                SetStatus("前次资源尚未释放，正在尝试强制清理…", PipelineState.Stopping);
+                try
+                {
+                    await pipeline.DisposeAsync();
+                    pipeline = null;
+                    pipelineCleanupFailed = false;
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"前次音频或服务资源无法释放: {ex.Message}，禁止重复启动", PipelineState.Error);
+                    throw new InvalidOperationException("Previous pipeline failed to clean up.", ex);
+                }
+            }
+            else
+            {
+                await pipeline.DisposeAsync();
+            }
+        }
         pipeline = new(audio, asr, translator, settings, store);
         await StartPipelineInstanceAsync(pipeline);
     }
 
     async Task StartPipelineInstanceAsync(CaptionPipeline current)
     {
+        if (pipelineCleanupFailed && pipeline is not null && !ReferenceEquals(pipeline, current))
+        {
+            SetStatus("前次资源释放失败，禁止启动新管线", PipelineState.Error);
+            throw new InvalidOperationException("Previous pipeline failed to clean up.");
+        }
         pipeline = current;
         current.StatusChanged += s => Dispatcher.BeginInvoke(() =>
         {
@@ -541,21 +567,57 @@ public sealed class MainWindow : Window
         await current.StartAsync();
     }
 
-    async Task StopCaptureCoreAsync()
+    async Task StopCaptureCoreAsync(StopReason reason = StopReason.UserStop)
     {
         if (pipeline is null)
             return;
         var previous = pipeline;
-        pipeline = null;
-        store.BeginSession(false);
-        await previous.DisposeAsync();
-        if (ReferenceEquals(previous, pipeline))
-            pipeline = null;
-        SetStatus("准备就绪 · 点击开始采集系统音频", PipelineState.Stopped);
+        try
+        {
+            if (reason == StopReason.Reconfigure)
+            {
+                store.BeginSession(false);
+                await previous.StopAsync(StopReason.Reconfigure);
+                await previous.DisposeAsync();
+            }
+            else
+            {
+                await previous.StopAsync(reason);
+                await previous.DisposeAsync();
+            }
+            if (ReferenceEquals(previous, pipeline))
+            {
+                pipeline = null;
+                pipelineCleanupFailed = false;
+            }
+            SetStatus("准备就绪 · 点击开始采集系统音频", PipelineState.Stopped);
+        }
+        catch (Exception ex)
+        {
+            pipelineCleanupFailed = true;
+            SetStatus($"停止或清理异常: {ex.Message}，请重试停止或检查配置", PipelineState.Error);
+            throw;
+        }
     }
 
     async Task StartConfiguredPipelineAsync()
     {
+        if (pipelineCleanupFailed && pipeline is not null)
+        {
+            SetStatus("前次资源尚未释放，正在尝试强制清理…", PipelineState.Stopping);
+            try
+            {
+                await pipeline.DisposeAsync();
+                pipeline = null;
+                pipelineCleanupFailed = false;
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"前次音频或服务资源无法释放: {ex.Message}，禁止重复启动", PipelineState.Error);
+                throw new InvalidOperationException($"前次音频或服务资源无法释放: {ex.Message}，禁止重复启动", ex);
+            }
+        }
+
         if (TestPipelineFactory is { } factory)
             await StartPipelineInstanceAsync(factory(settings, store));
         else
@@ -566,7 +628,7 @@ public sealed class MainWindow : Window
     {
         var wasRunning = pipeline is not null && !pipeline.Completion.IsCompleted;
         SetStatus("正在切换语言并释放旧会话…", PipelineState.Connecting);
-        await StopCaptureCoreAsync();
+        await StopCaptureCoreAsync(StopReason.Reconfigure);
         settings = LanguageSettings.Select(settings, sourceId, targetId);
         store.BeginSession();
         RefreshLanguages();
@@ -615,7 +677,7 @@ public sealed class MainWindow : Window
 
     public Task StartDemoAsync() => RunActionAsync(async () =>
     {
-        await StopCaptureCoreAsync();
+        await StopCaptureCoreAsync(StopReason.Reconfigure);
         await StartPipelineAsync(new DemoAudioSource(), new DemoAsrProvider(), new DemoTranslationProvider());
         SetStatus("本地演示 · 合成字幕，无音频采集或网络请求", PipelineState.Listening);
     });
@@ -789,6 +851,18 @@ public sealed class MainWindow : Window
                 statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
                 start.Content = "停止";
                 break;
+            case PipelineState.Retrying:
+                statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange #FF9800
+                statusText.Text = "重试中";
+                statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
+                start.Content = "停止";
+                break;
+            case PipelineState.Stopping:
+                statusDot.Background = new SolidColorBrush(Color.FromRgb(200, 200, 200));
+                statusText.Text = "停止中";
+                statusText.Foreground = Brushes.Gray;
+                start.Content = "停止";
+                break;
             case PipelineState.Error:
                 statusDot.Background = new SolidColorBrush(Color.FromRgb(244, 67, 54)); // Red #F44336
                 statusText.Text = "连接异常";
@@ -816,7 +890,7 @@ public sealed class MainWindow : Window
         {
             while (busy)
                 await Task.Delay(20);
-            await StopCaptureCoreAsync();
+            await StopCaptureCoreAsync(StopReason.Shutdown);
             if (persistSettings)
             {
                 settings = settings with
@@ -861,6 +935,9 @@ public sealed class MainWindow : Window
     internal AppSettings TestSettings => settings;
     internal void TestConfigure(AppSettings value) { settings = LanguageSettings.Upgrade(value); ApplyTheme(); RefreshLanguages(); Render(); }
     internal Task TestStartAsync() => RunActionAsync(StartConfiguredPipelineAsync);
+    internal Task TestStopCaptureAsync(StopReason reason = StopReason.UserStop) => RunActionAsync(() => StopCaptureCoreAsync(reason));
+    internal Task TestToggleCaptureAsync() => ToggleCaptureAsync();
+    internal bool TestPipelineCleanupFailed => pipelineCleanupFailed;
     internal string TestStatus => statusMessage;
     internal bool TestRunning => pipeline is not null && !pipeline.Completion.IsCompleted;
     internal LanguagePicker TestSourcePicker => sourceLanguage;

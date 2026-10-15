@@ -103,6 +103,7 @@ internal static class Phase4DesktopSmoke
             dialog.Width = 980; dialog.Height = 800; dialog.TestTheme("Dark"); dialog.TestPage("翻译服务"); await Idle(dialog); Capture(dialog, Path.Combine(directory, "settings-provider-dark.png"));
         }
         finally { dialog.Close(); }
+        await VerifyPhase5ReliabilityA1Async(main, check);
         main.TestPipelineFactory = null;
     }
     static async Task WheelAsync(Action<string, bool> check)
@@ -178,4 +179,152 @@ internal static class Phase4DesktopSmoke
         internal TranslationRequest? Last { get; private set; }
         public Task<string> TranslateAsync(TranslationRequest request, CancellationToken token) { Last = request; Started.TrySetResult(); return Release.Task; }
     }
+
+    internal static async Task VerifyPhase5ReliabilityA1Async(MainWindow main, Action<string, bool> check)
+    {
+        // 1. Desktop ordinary stop preserves delayed final within drain budget into visible UI
+        var delayedAsr = new DelayedFinalFixtureAsr(delayMs: 1200, "tail-sub-1", "tail final sentence");
+        var delayedMt = new DelayedFixtureTranslator(delayMs: 100, "尾部最终译文");
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(new FixtureAudio(), delayedAsr, delayedMt, settings, store);
+
+        await main.TestStartAsync();
+        await Idle(main);
+        check("desktop pipeline started for ordinary stop test", main.TestRunning);
+
+        // User clicks stop button via TestToggleCaptureAsync
+        await main.TestToggleCaptureAsync();
+        await Idle(main);
+
+        check("desktop ordinary stop returns to stopped status", !main.TestRunning && main.TestStatus.Contains("准备就绪"));
+        check("desktop ordinary stop preserved tail ASR and translation in store",
+            main.TestStore.Snapshot().Any(x => x.SourceText == "tail final sentence" && x.TranslationText == "尾部最终译文"));
+        check("desktop ordinary stop renders tail in visible UI",
+            main.TestSource.Contains("tail final sentence") && main.TestTarget.Contains("尾部最终译文"));
+
+        // 2. Language reconfigure immediately isolates session and drops delayed tail from old pipeline
+        var oldDelayedAsr = new DelayedFinalFixtureAsr(delayMs: 1500, "old-tail", "old delayed sentence");
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(new FixtureAudio(), oldDelayedAsr, new DelayedFixtureTranslator(50, "旧译文"), settings, store);
+
+        await main.TestStartAsync();
+        await Idle(main);
+        check("pipeline started before language switch", main.TestRunning);
+
+        // Switch language (Reconfigure)
+        await main.ApplyLanguageAsync("zh-Hans", "en");
+        await Idle(main);
+
+        check("language switch does not accept delayed tail from old pipeline",
+            !main.TestStore.Snapshot().Any(x => x.SourceText == "old delayed sentence"));
+
+        // 3. Repeated stop is idempotent
+        await main.TestStopCaptureAsync();
+        await Idle(main);
+        check("repeated stop is idempotent", !main.TestRunning);
+
+        // 4. Disposal failure preserves ownership & prevents conflict start
+        var failingAudio = new FailingDisposalAudio();
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(failingAudio, new FixtureAsr(), new FixtureTranslator(), settings, store);
+
+        await main.TestStartAsync();
+        await Idle(main);
+        try { await main.TestStopCaptureAsync(); } catch { }
+        await Idle(main);
+        check("failing disposal marks pipeline cleanup failed", main.TestPipelineCleanupFailed);
+
+        bool conflictBlocked = false;
+        try
+        {
+            await main.TestStartAsync();
+            await Idle(main);
+        }
+        catch
+        {
+            conflictBlocked = true;
+        }
+        check("cleanup failure prevents conflicting start", conflictBlocked || main.TestStatus.Contains("无法释放") || main.TestStatus.Contains("禁止"));
+
+        // Recover from failure
+        failingAudio.AllowDispose = true;
+        try { await main.TestStopCaptureAsync(); } catch { }
+        await Idle(main);
+
+        // 5. 100 fast start/stop/switch cycles without unobserved exceptions or duplicate captures
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(new FixtureAudio(), new FixtureAsr(), new DelayedFixtureTranslator(10, "ok"), settings, store);
+
+        bool cyclesOk = true;
+        for (int i = 0; i < 100; i++)
+        {
+            try
+            {
+                await main.TestStartAsync();
+                if (i % 2 == 0)
+                    await main.TestStopCaptureAsync();
+                else
+                    await main.TestToggleCaptureAsync();
+            }
+            catch
+            {
+                cyclesOk = false;
+                break;
+            }
+        }
+        await Idle(main);
+        check("100 start stop cycles complete cleanly without unhandled exceptions", cyclesOk && !main.TestRunning);
+
+        main.TestPipelineFactory = null;
+    }
+
+    sealed class DelayedFinalFixtureAsr(int delayMs, string id, string text) : IAsrProvider, IAsrSession
+    {
+        readonly Channel<AsrResult> channel = Channel.CreateUnbounded<AsrResult>();
+        public IAsrSession CreateSession(AsrConfiguration configuration) => this;
+        public Task ConnectAsync(CancellationToken token) => Task.CompletedTask;
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) => Task.CompletedTask;
+        public IAsyncEnumerable<AsrResult> GetResultsAsync(CancellationToken token) => channel.Reader.ReadAllAsync(token);
+        public async Task CompleteAsync(CancellationToken token)
+        {
+            await Task.Delay(delayMs, token);
+            channel.Writer.TryWrite(new(id, 1, text, true, TimeSpan.Zero, TimeSpan.FromSeconds(1), "en"));
+            channel.Writer.TryComplete();
+        }
+        public ValueTask DisposeAsync() { channel.Writer.TryComplete(); return ValueTask.CompletedTask; }
+    }
+
+    sealed class DelayedFixtureTranslator(int delayMs, string response) : ITranslationProvider
+    {
+        public async Task<string> TranslateAsync(TranslationRequest request, CancellationToken token)
+        {
+            await Task.Delay(delayMs, token);
+            return response;
+        }
+    }
+
+    sealed class FailingDisposalAudio : IAudioSource
+    {
+        volatile bool stopped;
+        public bool AllowDispose { get; set; }
+        public string Name => "Failing disposal fixture";
+        public Task StartAsync(CancellationToken token) => Task.CompletedTask;
+        public async IAsyncEnumerable<AudioChunk> ReadChunksAsync([EnumeratorCancellation] CancellationToken token)
+        {
+            while (!stopped && !token.IsCancellationRequested)
+            {
+                await Task.Delay(20, token);
+                yield return new(new byte[640], TimeSpan.Zero, TimeSpan.FromMilliseconds(20), System.Diagnostics.Stopwatch.GetTimestamp());
+            }
+        }
+        public Task StopAsync(CancellationToken token) { stopped = true; return Task.CompletedTask; }
+        public ValueTask DisposeAsync()
+        {
+            stopped = true;
+            if (!AllowDispose)
+                throw new IOException("Simulated device lock failure during disposal");
+            return ValueTask.CompletedTask;
+        }
+    }
 }
+

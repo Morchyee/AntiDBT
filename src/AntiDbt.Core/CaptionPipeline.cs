@@ -231,7 +231,8 @@ public sealed class CaptionPipeline : IAsyncDisposable
             _translations.Schedule(segment);
         }
     }
-    public async Task StopAsync(CancellationToken token = default)
+    public Task StopAsync(CancellationToken token) => StopAsync(StopReason.UserStop, token);
+    public async Task StopAsync(StopReason reason = StopReason.UserStop, CancellationToken token = default)
     {
         await _stopGate.WaitAsync(token);
         try
@@ -241,15 +242,45 @@ public sealed class CaptionPipeline : IAsyncDisposable
             if (_lifetime is null)
                 return;
             _stopRequested = true;
+
+            if (reason is StopReason.Reconfigure or StopReason.Shutdown)
+            {
+                Publish(PipelineState.Stopping, reason == StopReason.Reconfigure ? "正在切换配置并停止旧会话…" : "正在停止…");
+                _lifetime.Cancel();
+                _translations.CancelPending();
+                if (reason == StopReason.Reconfigure)
+                    Store.BeginSession(false);
+                using var quickDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                quickDeadline.CancelAfter(TimeSpan.FromSeconds(2));
+                try
+                {
+                    await _audio.StopAsync(quickDeadline.Token);
+                    await Completion.WaitAsync(quickDeadline.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (TimeoutException) { }
+                _stopCompleted = true;
+                return;
+            }
+
             Publish(PipelineState.Stopping, "正在停止并处理尾部字幕…");
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(9));
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
             try
             {
                 await _audio.StopAsync(deadline.Token);
                 await Completion.WaitAsync(deadline.Token);
             }
-            catch (OperationCanceledException) { _lifetime.Cancel(); try { await Completion.WaitAsync(TimeSpan.FromSeconds(2), token); } catch (OperationCanceledException) { } catch (TimeoutException) { } }
+            catch (OperationCanceledException)
+            {
+                _lifetime.Cancel();
+                try
+                {
+                    await Completion.WaitAsync(TimeSpan.FromSeconds(2), token);
+                }
+                catch (OperationCanceledException) { }
+                catch (TimeoutException) { }
+            }
             _translations.CancelPending();
             Store.BeginSession(false);
             _stopCompleted = true;

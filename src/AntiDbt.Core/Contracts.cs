@@ -8,6 +8,13 @@ public sealed record AsrResult(string SegmentId, int Revision, string Text, bool
 public sealed record TranslationRequest(long SessionId, string SegmentId, int Revision, string Text,
     string SourceLanguage, string TargetLanguage, IReadOnlyList<string> Context);
 
+public enum StopReason
+{
+    UserStop,
+    Reconfigure,
+    Shutdown
+}
+
 public interface IAudioSource : IAsyncDisposable
 {
     string Name
