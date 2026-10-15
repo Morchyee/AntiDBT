@@ -60,6 +60,8 @@ public sealed record AppSettings
 {
     public AsrConfiguration Asr { get; init; } = new();
     public TranslationConfiguration Translation { get; init; } = new();
+    public Dictionary<string,AsrConfiguration> AsrProfiles { get; init; } = new();
+    public Dictionary<string,TranslationConfiguration> TranslationProfiles { get; init; } = new();
     public string TargetLanguage { get; init; } = "zh";
     public string FontSize { get; init; } = "medium";
     public bool ShowSource { get; init; } = true;

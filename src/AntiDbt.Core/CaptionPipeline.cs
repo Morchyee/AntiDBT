@@ -149,14 +149,16 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     break;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
-                catch (Exception) when (!_stopRequested && !_captureEnded && !token.IsCancellationRequested && failures < 10)
+                catch(ProviderException error) when(error.Kind is ProviderErrorKind.Configuration or ProviderErrorKind.Authentication or ProviderErrorKind.Quota or ProviderErrorKind.ModelUnavailable or ProviderErrorKind.UnsupportedLanguage){throw;}
+                catch (Exception error) when (!_stopRequested && !_captureEnded && !token.IsCancellationRequested && failures < 10)
                 {
                     connection.Cancel();
                     _translations.CancelPending();
                     Store.BeginSession(false);
                     failures++;
                     Publish(PipelineState.Retrying, $"识别连接中断，正在重试 {failures}/10");
-                    await Task.Delay(500, token);
+                    var retry=error is ProviderException { Kind:ProviderErrorKind.RateLimited,RetryAfter:{ } interval }?interval:TimeSpan.FromMilliseconds(500);
+                    await Task.Delay(retry<TimeSpan.Zero?TimeSpan.Zero:retry, token);
                 }
                 finally
                 {
@@ -173,6 +175,10 @@ public sealed class CaptionPipeline : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (ProviderException error)
+        {
+            failed=true;Publish(PipelineState.Error,$"{error.Kind}: {error.Message}");
+        }
         catch (Exception)
         {
             failed = true;

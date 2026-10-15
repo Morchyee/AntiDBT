@@ -21,8 +21,10 @@ public sealed class SettingsStore
         get; private set;
     }
     sealed record Envelope(int Version, AppSettings Settings, string ProtectedSecrets);
+    sealed record Credential(string ApiKey, Dictionary<string,string> Values,string Endpoint="");
     sealed record Secrets(string AsrApiKey, Dictionary<string, string> Asr,
-        string TranslationApiKey, Dictionary<string, string> Translation);
+        string TranslationApiKey, Dictionary<string, string> Translation,
+        Dictionary<string,Credential>? AsrProfiles = null, Dictionary<string,Credential>? TranslationProfiles = null);
 
     public async Task<AppSettings> LoadAsync()
     {
@@ -37,7 +39,7 @@ public sealed class SettingsStore
             {
                 var envelope = JsonSerializer.Deserialize<Envelope>(await File.ReadAllBytesAsync(path))
                     ?? throw new InvalidDataException();
-                if (envelope.Version != 1 || envelope.Settings is null)
+                if (envelope.Version is not (1 or 2) || envelope.Settings is null)
                     throw new InvalidDataException("Unsupported settings schema");
                 var plain = Dpapi.Transform(Convert.FromBase64String(envelope.ProtectedSecrets), false);
                 Secrets secrets;
@@ -48,8 +50,10 @@ public sealed class SettingsStore
                 finally { CryptographicOperations.ZeroMemory(plain); }
                 if (secrets.Asr is null || secrets.Translation is null)
                     throw new InvalidDataException();
+                if(secrets.AsrProfiles?.Values.Any(x=>x is null||x.Values is null)==true||secrets.TranslationProfiles?.Values.Any(x=>x is null||x.Values is null)==true)
+                    throw new InvalidDataException();
                 Validate(envelope.Settings);
-                return envelope.Settings with
+                var restored = envelope.Settings with
                 {
                     Asr = envelope.Settings.Asr with
                     {
@@ -62,6 +66,20 @@ public sealed class SettingsStore
                         Secrets = secrets.Translation
                     }
                 };
+                var asr = new Dictionary<string,AsrConfiguration>(restored.AsrProfiles);
+                var mt = new Dictionary<string,TranslationConfiguration>(restored.TranslationProfiles);
+                foreach(var entry in secrets.AsrProfiles??new())
+                    if(asr.TryGetValue(entry.Key,out var config)){CheckBinding(config.Endpoint,entry.Value.Endpoint);asr[entry.Key]=config with{ApiKey=entry.Value.ApiKey,Secrets=entry.Value.Values};}
+                foreach(var entry in secrets.TranslationProfiles??new())
+                    if(mt.TryGetValue(entry.Key,out var config)){CheckBinding(config.Endpoint,entry.Value.Endpoint);mt[entry.Key]=config with{ApiKey=entry.Value.ApiKey,Secrets=entry.Value.Values};}
+                if(envelope.Version==2)
+                {
+                    if(restored.Asr.Provider.Length>0){if(secrets.AsrProfiles is null||!secrets.AsrProfiles.TryGetValue(restored.Asr.Provider,out var selected))throw new InvalidDataException();CheckBinding(restored.Asr.Endpoint,selected.Endpoint);restored=restored with{Asr=restored.Asr with{ApiKey=selected.ApiKey,Secrets=selected.Values}};}
+                    if(restored.Translation.Provider.Length>0){if(secrets.TranslationProfiles is null||!secrets.TranslationProfiles.TryGetValue(restored.Translation.Provider,out var selected))throw new InvalidDataException();CheckBinding(restored.Translation.Endpoint,selected.Endpoint);restored=restored with{Translation=restored.Translation with{ApiKey=selected.ApiKey,Secrets=selected.Values}};}
+                }
+                if(restored.Asr.Provider.Length>0)asr[restored.Asr.Provider]=restored.Asr;
+                if(restored.Translation.Provider.Length>0)mt[restored.Translation.Provider]=restored.Translation;
+                return restored with{AsrProfiles=asr,TranslationProfiles=mt};
             }
             catch (Exception e) when (e is JsonException or InvalidDataException or
                 CryptographicException or FormatException or ArgumentException)
@@ -81,8 +99,15 @@ public sealed class SettingsStore
         try
         {
             Directory.CreateDirectory(directory);
+            var asrProfiles=new Dictionary<string,AsrConfiguration>(settings.AsrProfiles);
+            var mtProfiles=new Dictionary<string,TranslationConfiguration>(settings.TranslationProfiles);
+            if(settings.Asr.Provider.Length>0)asrProfiles[settings.Asr.Provider]=settings.Asr;
+            if(settings.Translation.Provider.Length>0)mtProfiles[settings.Translation.Provider]=settings.Translation;
+            settings=settings with{AsrProfiles=asrProfiles,TranslationProfiles=mtProfiles};
             var secret = new Secrets(settings.Asr.ApiKey, settings.Asr.Secrets,
-                settings.Translation.ApiKey, settings.Translation.Secrets);
+                settings.Translation.ApiKey, settings.Translation.Secrets,
+                asrProfiles.ToDictionary(x=>x.Key,x=>new Credential(x.Value.ApiKey,x.Value.Secrets,x.Value.Endpoint)),
+                mtProfiles.ToDictionary(x=>x.Key,x=>new Credential(x.Value.ApiKey,x.Value.Secrets,x.Value.Endpoint)));
             var plain = JsonSerializer.SerializeToUtf8Bytes(secret);
             byte[] encrypted;
             try
@@ -92,7 +117,7 @@ public sealed class SettingsStore
             finally { CryptographicOperations.ZeroMemory(plain); }
             // One atomic envelope avoids mismatching public settings and encrypted credentials.
             // JsonIgnore on the Core contracts keeps every secret out of Settings.
-            var envelope = new Envelope(1, settings, Convert.ToBase64String(encrypted));
+            var envelope = new Envelope(2, settings, Convert.ToBase64String(encrypted));
             var target = Path.Combine(directory, "settings.json");
             temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await using (var stream = new FileStream(temporary, FileMode.CreateNew,
@@ -119,11 +144,18 @@ public sealed class SettingsStore
 
     static void Validate(AppSettings s)
     {
-        if (s.Asr is null || s.Translation is null || s.Asr.Options is null ||
+        if (s.Asr is null || s.Translation is null || s.AsrProfiles is null || s.TranslationProfiles is null || s.Asr.Options is null ||
             s.Translation.Options is null || s.Asr.Secrets is null || s.Translation.Secrets is null ||
             s.MaxHistory <= 0 || s.SilenceSeconds <= 0 || s.Translation.TimeoutSeconds <= 0 ||
             s.Translation.DebounceMilliseconds < 0 || s.Translation.ContextSentences < 0)
             throw new InvalidDataException("Invalid settings schema");
+        if(s.AsrProfiles.Any(x=>x.Value is null||x.Value.Options is null||x.Value.Secrets is null||x.Key!=x.Value.Provider)||s.TranslationProfiles.Any(x=>x.Value is null||x.Value.Options is null||x.Value.Secrets is null||x.Key!=x.Value.Provider))
+            throw new InvalidDataException("Invalid provider profile");
+    }
+    static void CheckBinding(string actual,string encrypted)
+    {
+        static string Origin(string value)=>Uri.TryCreate(value,UriKind.Absolute,out var uri)?uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant():value;
+        if(Origin(actual)!=Origin(encrypted))throw new InvalidDataException("Credential host binding changed");
     }
 }
 

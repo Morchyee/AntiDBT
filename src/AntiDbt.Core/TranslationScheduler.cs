@@ -111,6 +111,10 @@ public sealed class TranslationScheduler : IAsyncDisposable
                     if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
                         Error?.Invoke("翻译请求超时，请检查服务或重试");
                 }
+                catch (ProviderException error) when (!token.IsCancellationRequested)
+                {
+                    if(store.ApplyTranslationError(segment.SessionId,segment.SegmentId,segment.Revision,error.Message))Error?.Invoke(error.Message);
+                }
                 catch (Exception) when (!token.IsCancellationRequested)
                 {
                     if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译服务调用失败"))

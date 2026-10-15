@@ -50,6 +50,33 @@ await Test("review-concurrent-start-dispose", async () =>
 {
     using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim(); var session = new DelayedCapture { StartAction = () => { entered.Set(); release.Wait(TimeSpan.FromSeconds(2)); }, AutomaticStop = true }; var source = new WasapiAudioSource(() => session); var starting = Task.Run(() => source.StartAsync(default)); Check(entered.Wait(TimeSpan.FromSeconds(2))); var disposing = Task.Run(async () => await source.DisposeAsync()); release.Set(); await Task.WhenAll(starting, disposing).WaitAsync(TimeSpan.FromSeconds(3)); Check(session.Disposed && session.StopRequests == 1); await source.DisposeAsync();
 });
+await Test("phase3-all-profile-secrets-encrypted-and-delete-isolated",async()=>{
+    var dir=Path.Combine(temp,"profiles");var store=new SettingsStore(dir);
+    var a=new AsrConfiguration{Provider="AzureSpeech",ApiKey="private-profile-a",Options=new(){["region"]="eastus"}};
+    var g=new AsrConfiguration{Provider="GoogleCloudSpeech",Secrets=new(){["serviceAccountJson"]="private-profile-json"}};
+    var t=new TranslationConfiguration{Provider="OpenAiCompatible",Endpoint="https://example.invalid/v1",ApiKey="private-profile-mt"};
+    var settings=new AppSettings{Asr=a,Translation=t,AsrProfiles=new(){[a.Provider]=a,[g.Provider]=g},TranslationProfiles=new(){[t.Provider]=t}};
+    await store.SaveAsync(settings);var raw=await File.ReadAllTextAsync(Path.Combine(dir,"settings.json"));Check(!raw.Contains("private-profile"),"profile secret plaintext");
+    var loaded=await store.LoadAsync();Check(loaded.AsrProfiles[g.Provider].Secrets["serviceAccountJson"]==g.Secrets["serviceAccountJson"],"nonselected secret lost");
+    await store.SaveAsync(loaded with{Asr=loaded.Asr with{ApiKey="",Secrets=new()}});loaded=await store.LoadAsync();Check(loaded.Asr.ApiKey==""&&loaded.AsrProfiles[a.Provider].ApiKey==""&&loaded.AsrProfiles[g.Provider].Secrets.Count==1,"delete affected wrong profile");
+});
+await Test("phase3-v1-migration-retains-credentials-and-display",async()=>{
+    var dir=Path.Combine(temp,"v1");Directory.CreateDirectory(dir);var old=new AppSettings{Asr=new(){Provider="VolcengineAsr2",ApiKey="legacy-a"},Translation=new(){Provider="VolcengineMachineTranslation",ApiKey="legacy-t"},FontSize="large",ShowSource=false};
+    var plain=JsonSerializer.SerializeToUtf8Bytes(new{AsrApiKey="legacy-a",Asr=new Dictionary<string,string>(),TranslationApiKey="legacy-t",Translation=new Dictionary<string,string>()});
+    var settingsNode=System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(old))!;settingsNode.AsObject().Remove("AsrProfiles");settingsNode.AsObject().Remove("TranslationProfiles");
+    var envelope=new{Version=1,Settings=settingsNode,ProtectedSecrets=Convert.ToBase64String(Dpapi.Transform(plain,true))};await File.WriteAllTextAsync(Path.Combine(dir,"settings.json"),JsonSerializer.Serialize(envelope));
+    var store=new SettingsStore(dir);var loaded=await store.LoadAsync();Check(loaded.Asr.ApiKey=="legacy-a"&&loaded.Translation.ApiKey=="legacy-t"&&loaded.AsrProfiles.Count==1&&loaded.FontSize=="large"&&!loaded.ShowSource,"v1 migration");
+    await store.SaveAsync(loaded);using var doc=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(dir,"settings.json")));Check(doc.RootElement.GetProperty("Version").GetInt32()==2,"schema not upgraded");
+});
+await Test("phase3-tampered-credential-host-binding-refused",async()=>{
+    var dir=Path.Combine(temp,"hostbinding");var store=new SettingsStore(dir);await store.SaveAsync(new(){Translation=new(){Provider="OpenAiCompatible",Endpoint="https://good.example/v1",ApiKey="private-pinned-key"}});
+    var path=Path.Combine(dir,"settings.json");var node=System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;node["Settings"]!["Translation"]!["Endpoint"]="https://attacker.example/v1";await File.WriteAllTextAsync(path,node.ToJsonString());
+    var loaded=await store.LoadAsync();Check(store.Warning is not null&&loaded.Translation.ApiKey=="","tampered origin accepted");
+});
+await Test("phase3-selected-profile-tamper-never-substitutes-other-key",async()=>{
+    var dir=Path.Combine(temp,"substitution");var store=new SettingsStore(dir);var selected=new TranslationConfiguration{Provider="DeepL",Endpoint="https://api.deepl.com/v2/translate",ApiKey="private-deepl-only"};var custom=new TranslationConfiguration{Provider="OpenAiCompatible",Endpoint="https://custom.example/v1",ApiKey="private-custom-only"};await store.SaveAsync(new(){Translation=selected,TranslationProfiles=new(){[custom.Provider]=custom}});
+    var path=Path.Combine(dir,"settings.json");var node=System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;node["Settings"]!["Translation"]!["Provider"]=custom.Provider;node["Settings"]!["Translation"]!["Endpoint"]=custom.Endpoint;await File.WriteAllTextAsync(path,node.ToJsonString());var loaded=await store.LoadAsync();Check(loaded.Translation.ApiKey!="private-deepl-only","cross-profile credential substitution");Check(store.Warning is not null||loaded.Translation.ApiKey==custom.ApiKey,"selected key not from bound profile");
+});
 if (args.Contains("--capture-smoke")) await Test("hardware-capture-smoke", async () => { await using var source = new WasapiAudioSource(); using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(3)); await source.StartAsync(cancel.Token); int bytes = 0; try { await foreach (var chunk in source.ReadChunksAsync(cancel.Token)) bytes += chunk.Pcm.Length; } catch (OperationCanceledException) { } await source.StopAsync(default); Console.WriteLine(JsonSerializer.Serialize(new { captureBytes = bytes, audioPersisted = false })); });
 Directory.Delete(temp, true); var artifact = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/windows-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact, JsonSerializer.Serialize(new { failures, hardwareRequested = args.Contains("--capture-smoke"), results }, new JsonSerializerOptions { WriteIndented = true })); return failures == 0 ? 0 : 1;
 
