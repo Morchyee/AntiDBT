@@ -12,4 +12,8 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-This independent prototype does not distribute Doubao application binaries, code or assets. Volcengine services are separately configured by the user; this software has no bundled service credentials.
+Phase3 also includes Microsoft.CognitiveServices.Speech 1.52.0 (Microsoft Speech SDK license), Google.Cloud.Speech.V2 1.8.0 and its transitive Google/gRPC/protobuf/authentication dependencies. Package-supplied licenses/notices and exact resolved NuGet metadata are included in `licenses/packages`; `licenses/DEPENDENCIES.json` inventories them. Google Cloud Speech client library uses Apache-2.0. Use of cloud services is separately subject to each service's account, billing and service terms.
+
+For packages without a license text in the NuGet root, `licenses/upstream` also includes protobuf BSD-3-Clause, grpc-dotnet Apache-2.0, and Azure.Core/System.ClientModel MIT texts fetched from the exact repository commits declared by their packages. `licenses/upstream/SOURCES.json` records source URLs and SHA256. NAudio's MIT text is reproduced above; .NET license and third-party notices are included separately.
+
+This independent prototype does not distribute Doubao application binaries, code or assets. Cloud services are separately configured by the user; this software has no bundled service credentials.

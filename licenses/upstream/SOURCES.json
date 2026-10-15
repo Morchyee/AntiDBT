@@ -1,0 +1,22 @@
+[
+  {
+    "file": "PROTOBUF-LICENSE",
+    "source": "https://raw.githubusercontent.com/protocolbuffers/protobuf/74211c0dfc2777318ab53c2cd2c317a2ef9012de/LICENSE",
+    "sha256": "6E5E117324AFD944DCF67F36CF329843BC1A92229A8CD9BB573D7A83130FEA7D"
+  },
+  {
+    "file": "AZURE-CORE-LICENSE",
+    "source": "https://raw.githubusercontent.com/Azure/azure-sdk-for-net/b3ee3eb51d5dfdc7592b1e75e10e3d360382f5c6/LICENSE.txt",
+    "sha256": "9B45236978BB5CD5DE992021769E1EEAA79F0116D3B02CF8BA065A1ED603D5FA"
+  },
+  {
+    "file": "GRPC-DOTNET-LICENSE",
+    "source": "https://raw.githubusercontent.com/grpc/grpc-dotnet/c2555f2951c56a23d6c57bae6970cdfd30c552a7/LICENSE",
+    "sha256": "CFC7749B96F63BD31C3C42B5C471BF756814053E847C10F3EB003417BC523D30"
+  },
+  {
+    "file": "SYSTEM-CLIENTMODEL-LICENSE",
+    "source": "https://raw.githubusercontent.com/Azure/azure-sdk-for-net/7a16feb32d540a5dac27a5848dcdc553e47a0054/LICENSE.txt",
+    "sha256": "9B45236978BB5CD5DE992021769E1EEAA79F0116D3B02CF8BA065A1ED603D5FA"
+  }
+]

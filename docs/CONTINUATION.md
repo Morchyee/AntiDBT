@@ -1,5 +1,11 @@
 # 接续入口与待解决问题
 
+第三阶段接续先读 `phase3/PROGRESS.md`、`API_PROVIDERS.md` 与 `../../reports/phase3/PROGRESS.md`。代码已扩展4种ASR/6种MT，默认火山不变。读取当前VALIDATION的Phase3部分；下面Phase2遗留问题仍有效，不把新增Provider本地通过视为其真实云验收。
+
+已完成的第三阶段代码问题不应重做：Groq跨自动会话冷却、Final抢占/优先排队、畸形HTTP错误分类、Azure简繁别名，以及此前SDK multi-interim/取消清理与凭据绑定均有针对性回归和审查。完整脚本覆盖Core36/Windows19/原Volc26/HTTP86/SDK36/WPF26/组合13（10组合）。最终便携目录为 `../publish/antiDBT-phase3-win-x64-r4`；使用ZIP时解压整个目录配套文件。r1为修复前候选，r2/r3为构建/重复发布证据，不能优先于r4交付。
+
+发布脚本可重复执行：`scripts/publish-phase3.ps1 -Offline`，同名输出存在时寻找新编号，不覆盖旧包。脚本只生成目录；ZIP及校验记录在本次交付的artifacts/phase3。不要把用户配置data复制到新包，不要自动读取保存密钥来跑付费测试。下一阶段优先用用户在软件设置填写的独立配置进行真实服务验收，并明确记录计费范围/公开音频与结果边界；未提供配置不阻碍离线维护。
+
 先阅读 `../../reports/phase2/PROGRESS.md`，然后 README、ARCHITECTURE、COMPLETION-MATRIX、VALIDATION、PROVIDER-SPECS。代码在 `src`，验证工具在 `tests`/`scripts`，第一阶段原始证据在项目根 reports/analysis/extracted，**不要把分析摘录复制到产品**。
 
 当前已交付可配置的 Windows 桌面原型和自带运行时发布。当前默认 Provider 是火山豆包流式 ASR2 + 豆包机器翻译，字幕 Core 没有厂商实现。Seed LiveInterpret2 未启用，不能用其他实时语音对话协议冒充。

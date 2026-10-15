@@ -1,0 +1,13 @@
+# HTTP/config implementation report (root, pre-review)
+
+Implemented real HTTP MT adapters for DeepL, Azure Translator, Google Translation Basic V2 API-key, Groq Chat Completions, and custom OpenAI Chat Completions. Groq Whisper transcriptions uses PCM-to-WAV local energy VAD, bounded queue4, overlapping forced cuts, final-only events. Public default endpoints/capabilities independent in ProviderDescriptors; existing Volc algorithm untouched.
+
+ProviderHttp: HTTPS + official-host pinning (custom user URL separately allowed), no redirects, header validation, 4MiB responses, typed locally-authored errors, total timeout/cancel, <=2 attempts for429/5xx, Retry-After shared cooldown per provider instance. Whisper does not auto-retry5xx/network to reduce uncertain duplicate billing. No cross-provider fallback.
+
+Profiles: AppSettings optional dictionaries preserve v1 shape. SettingsStore v2 encrypts every profile's keys/secret maps + endpoint host-binding with DPAPI; v1 import keeps selected credentials/display. Plaintext host tampering rejected. UI custom host re-entry issue identified separately and queued for task UI fix.
+
+Test evidence: artifacts/phase3/http-tests.json 56/56 mock HttpMessageHandler protocol assertions; initial regression-red caught real Azure Text camelcase and empty prompt issues, fixed. Windows18/18 including multi-secret encryption/delete isolation, true v1 envelope migration and tampered-host refusal. SDK/UI results in their own reports. No cloud calls. More real localhost and failure-path tests in progress. No authenticated or long-session acceptance claimed.
+
+Current constraints: Google MT Basic only (no Advanced auth mixing), Azure MT global official endpoint; no explicit new proxy UI because no existing safe custom-proxy facility was present. Uses system networking defaults. Groq text models fetched only on explicit button; modal suitability still needs strengthened filtering. Streamed LLM tokens not used; subtitle preview derives from current ASR revisions with final MT HTTP responses.
+
+2026-10-15 continuation: scoped review fixes completed (selected-profile substitution, quota429 terminal handling, monotonic concurrent cooldown, word/punctuation boundary and dropped-job adjacency). Windows19/19 and HTTP64/64 now pass; scoped-rereview.md approved. Groq model candidates now filter known speech/guard/compound IDs and label suitability unverified. Actuallocalhost13/13 with10pipeline combinations passed; SDKs are gateway substitutes there, not realgRPCwire. Whole-branch final-review.md later found cooldown across Groq sessions, Final priority and malformed-error classification gaps; one combined fix wave is in progress, so these earlier counts are not final post-fix acceptance.

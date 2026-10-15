@@ -1,0 +1,25 @@
+# Scoped UI and HTTP/config re-review
+
+Reviewed 2026-10-15. Scope: findings in ui-review.md and http-review.md plus directly introduced breakage. Inspected current SettingsWindow, DesktopSmoke, SettingsStore, ProviderHttp, GroqWhisperProvider, Multi/Windows test sources and reports. SDK approval remains in sdk-rereview.md and was not reopened. No tests rerun, cloud requests or implementation edits in this review.
+
+## Verdict
+
+The reported implementation defects are resolved. **Approve these scoped fixes:** no remaining blocker was identified within this scope. Refreshed execution evidence reports HTTP 64/64, Windows 19/19 and UI 26/26 passing. This is scoped offline acceptance, not authenticated cloud or release acceptance.
+
+## Dispositions
+
+- **UI custom-host credential reuse: resolved.** Endpoint TextChanged immediately snapshots the editor. A normalized authority change clears rendered secrets, ApiKey and retained secret dictionary before writing the profile; subsequent snapshots, provider switches and Save use the same protection. Same-authority path edits preserve the credential. Once the new authority has been captured, a newly entered key is retained on subsequent snapshots, so reentry is possible. No implicit transfer of the old key to the new authority was found.
+- **UI close cancellation follow-up: resolved in implementation.** Closed cancels the dialog token passed into FetchGroqModelsAsync. Success, failure and finally paths suppress detached-control updates after cancellation. The actual smoke establishes token cancellation on close, not cancellation of a real in-flight HTTP request.
+- **Selected-profile credential substitution: resolved.** For v2, selected ApiKey and secret map are replaced from the same encrypted profile Credential whose endpoint binding was checked. The top-level values no longer survive that branch. The two-profile substitution regression passes in the inspected Windows log. V1 migration retains its existing explicit behavior.
+- **429 terminal quota: resolved for the reported codes.** The 429 branch invokes classification before establishing cooldown or retrying. insufficient_quota and RESOURCE_EXHAUSTED map to Quota. The recorded single-request insufficient_quota regression passes. RESOURCE_EXHAUSTED is covered by source inspection, not a dedicated new fixture.
+- **Overlap partial-word and punctuation: resolved for the reported examples.** A match must have both prior-start and current-end word boundaries for non-CJK text; trailing prior punctuation is removed for comparison. Existing CJK behavior is retained. Recorded whole-word/CJK and cat/catalog/punctuation cases pass.
+- **Dropped-job adjacency: resolved.** Each queued job has an increasing ID; removal requires overlap plus current ID equal to the previously processed ID plus one. A dropped queued predecessor therefore disables trimming against an unrelated processed result. The blocked-first-request queue-overflow regression passes.
+- **Cooldown shortening: resolved.** Under the existing lock, the deadline becomes max(current deadline, new deadline); waiters recheck after delay. A shorter arriving header cannot replace the longer stored deadline. The revised regression first waits for both requests to enter the handler, releases the long response before the short response, observes the call count before cancellation and reports that count on failure. The refreshed run passes. The production max-deadline fix is unchanged. Response processing still uses 150 ms observation intervals rather than a virtual clock or explicit post-classification hook; this is bounded real-clock fixture evidence, not an exhaustive concurrency proof.
+
+## Evidence and limits
+
+- artifacts/phase3-ui-review/desktop-smoke.json: 26/26 pass, timestamp 2026-10-15T10:06:16.1223551+08:00. Covers same-authority retention, host-change deletion through switching, other-provider isolation, saved Result, reopened Result and close-token cancellation. New-key reentry was inspected, not explicitly asserted. Result reopening is in memory, not a disk/DPAPI UI round-trip.
+- artifacts/phase3/Windows-green.log: all 19 named checks PASS, including v1 migration, encrypted profiles, endpoint tampering and selected-profile substitution.
+- artifacts/phase3/Providers.Multi-green.log and http-tests.json: 64/64 pass on refreshed inspection, including the repaired concurrent-cooldown fixture. The earlier inspected run had 63/64; that failure is superseded by the revised fixture and successful rerun, not counted as an initial success.
+- These are inspected execution artifacts produced by the coordinating run, not tests executed by this reviewer. HTTP handlers use dummy credentials; they do not prove authenticated cloud acceptance, socket redirects, long sessions or actual billing. No new claim is made about native SDK runtime, hardware capture, release packaging or end-to-end provider combinations.
+- Previously noted broad save-failure/cancel/session-switch coverage and malformed error-envelope hardening remain outside this narrow correction gate; they were not silently upgraded to verified behavior.

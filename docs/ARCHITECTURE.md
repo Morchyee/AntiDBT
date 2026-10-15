@@ -1,5 +1,7 @@
 # 模块与技术架构
 
+第三阶段（2026-10-15）在此架构上新增多Provider，所有厂商代码留在 Providers/CloudSpeech，Core 接口、subtitle ID/revision/generation 与进程内事件语义不变。项目没有独立 IPC 服务，本轮没有新增 IPC。完整配置/限制见 [API_PROVIDERS](API_PROVIDERS.md)。
+
 此实现从第一阶段**可验证的行为规格**独立编写。第一阶段资源摘录和二进制没有进入产品工程。Windows 音频依赖 NAudio 2.3.0；UI 使用 WPF/.NET 9；无浏览器运行时或其他项目依赖。
 
 ```mermaid
@@ -28,10 +30,14 @@ flowchart LR
 | `SubtitleProjection.cs` | `Compact/Expanded`；句边界、两轨段落与草稿状态 |
 | `LatencyMonitor.cs` | 最近 1000 次单调时钟观测，median/p95 |
 | `src/AntiDbt.Windows/AudioSources.cs` | `WasapiAudioSource`、`StreamingPcmConverter`、`PcmRing`、`WaveFileAudioSource` |
-| `SettingsStore.cs` | 原子配置封套、DPAPI、损坏恢复；秘密字段不参与普通设置序列化 |
+| `SettingsStore.cs` | v2 原子DPAPI封套、每个Provider独立profile、v1迁移；秘密不参与普通JSON，密钥与scheme/authority绑定 |
 | `src/AntiDbt.Providers/ProviderCatalog.cs` | 当前适配器选择与默认值；新增厂商只扩展 Provider 层和设置选择，无须改字幕核心 |
 | `VolcengineAsrProvider.cs` | 公开二进制 WebSocket 协议、累计 utterance 调和、临时片段删除与本地修订号 |
 | `VolcengineMachineTranslationProvider.cs` | 公开 HTTP MT、语言映射、安全错误、响应大小与重定向限制 |
+| `ProviderDescriptors.cs` | Provider ID、能力/认证字段/配置验证、默认profiles、显式Groq模型候选获取；不进入字幕核心 |
+| `GroqWhisperProvider.cs` | 有界本地能量VAD分段、内存WAV、Final-only、相邻作业文本重叠去重 |
+| `HttpTranslationProvider.cs` / `ProviderHttp.cs` | DeepL、Azure、Google Basic、Groq/custom Chat Completions；安全端点、有限重试、冷却、结构化错误 |
+| `src/AntiDbt.CloudSpeech` | Azure官方原生SDK连续识别、Google V2官方gRPC；共享会话生命周期及稳定Partial/Final ID，ISpeechTransport测试缝 |
 | `src/AntiDbt.Desktop/MainWindow.cs` | 生命周期互斥、原文优先、双模式、虚拟历史、滚动跟随、复制、置顶及窗口位置 |
 | `SettingsWindow.cs` | 所有用户 API 配置和 PasswordBox 密钥输入 |
 
@@ -51,7 +57,7 @@ WASAPI 采集当前指定输出设备；支持 PCM16/24/32 与 float32，下混�
 
 每个片段由 session、segment ID、revision 定位。原文立即入状态并触发界面；翻译独立等待。更高修订覆盖原文，删除事件移除被重切分替代的片段，同时取消其待翻译工作。当前 session 有界 tombstone 防止旧修订复活。
 
-固定合并窗口默认 350 ms，持续修订不会不断重置等待。一个片段正在翻译时保留最新待处理快照，完成或失败后继续最新版本。最终片段不额外等待窗口，但已开始的等待最长仍可有剩余窗口。翻译请求 2 并发，使用超时与主动取消；不遵守取消的自定义 Provider 最多允许 16 个未完成调用，之后暂停创建该类调用，避免无限堆积。
+固定合并窗口默认 350 ms，持续修订不会不断重置等待。一个片段正在翻译时保留最新待处理快照，完成或失败后继续最新版本。最终片段唤醒该片段正在等待的合并窗口，取消被替代的预览等待，并优先于排队中的预览取得请求槽。翻译请求 2 并发，使用超时与主动取消；不遵守取消的自定义 Provider 最多允许 16 个未完成调用，之后暂停创建该类调用，避免无限堆积。
 
 `TranslationText` 只对应当前精确修订。旧假设的完成译文可放在单独的 `ProvisionalTranslationText/TranslationRevision`，以“待更新”标记显示；不能覆盖更高修订译文，也不能跨会话。这样持续说话且 MT 慢于 ASR 时仍能显示明确标注的译文草稿。最终译文替换草稿。字幕核心上下文最多取当前会话之前 4 条 final；当前公开 MT 没有上下文字段，适配器不发送该上下文。
 
@@ -64,3 +70,15 @@ UI 的忙状态串行化开始、停止、语言、演示和设置切换。关�
 新认证 `X-Api-Key`，旧认证 APP ID + Access Token。仅 Provider 层掌握认证头；UI SettingsStore 使用 CurrentUser DPAPI 加密秘密。仅在明确开始后发往公开服务；未读取豆包的用户数据或运行时网络凭据。产品不保存音频。默认仅内存保存字幕，不提供持久导出。生产接口禁止明文和 HTTP 重定向；loopback 测试例外只在适配器中允许。
 
 ASR 累计结果调和假设 ordered/non-overlapping、final prefix；时间水位释放已定稿文本，未定稿 suffix 最多 512。不支持的 finalized boundary overlap 会报安全错误并重试，真实服务是否出现这种形状需样本验证。无法从公开客户端交互推断云端模型内部断句、上下文和翻译实现。
+
+## 多 Provider 扩展
+
+ProviderCatalog 独立创建选中的 ASR 和 MT，4×6 个有效配置可独立配对，不增加跨厂商自动 fallback。ProviderDescriptors 管理设置元数据；Google STT 服务账户 JSON 与 Google MT Basic Key 分属两个加密 profile。SettingsWindow 切换只修改副本，接受时旧管线先停止释放，清空字幕 generation；取消不会把编辑写入原配置。配置完整检查与真实服务验证分开。
+
+Groq 使用10ms能量帧、200ms前滚、默认1–4秒段、600ms静音切段和200ms强制重叠。作业队列4、结果队列256，均有界；序列HTTP只输出Final，结果不得冒充原生Partial。重叠只对相邻作业去重，Latin整词边界/中文后缀处理不能替代真实语音验证。
+
+Azure 连续识别通过官方 SDK 回调映射；Google 配置先发，后续纯音频消息≤15000字节，V2 long识别、interim_results=true，4分45秒生命周期上限由会话层直接取消gRPC并交核心重连。SDK共享会话单写入、终止后拒绝写入、失败连接清理、EOF后等待Final、结果队列256超载报错。Azure原生同步Write/Close/Dispose仍可能受SDK/驱动阻塞，不把托管WaitAsync当作本机调用绝不阻塞的保证。
+
+新增ProviderException仅描述错误类别和受控安全消息；ASR配置/认证/配额/模型/语言错误不执行10次重连，限流重连遵守Retry-After。翻译超时/取消沿用核心调度边界。HTTP实例共享并发冷却截止，新的较短Retry-After不会缩短已有冷却；最多两次尝试，总超时覆盖等待/传输/响应读取，正文≤4MiB。明确配额不重试，Whisper不重试不确定的网络/5xx提交。
+
+上文关于“当前MT不发送上下文”的说明特指原有豆包MT。第三阶段DeepL发送≤2000字符短context，Groq/custom LLM将有界前文作为明确标注的数据加入system提示；Azure/Google Basic不发送该上下文。模型是否遵从纯翻译提示须真实效果验收，客户端不声称掌握云端内部上下文算法。

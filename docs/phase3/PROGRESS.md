@@ -1,0 +1,31 @@
+# Phase 3 ledger — plan: docs/phase3/PLAN.md
+
+## Current state — 2026-10-15
+
+- Tasks1–5 complete within documented offline/local acceptance scope. ZIP95/95file SHA checks passed; no privatepackagepaths. Realcloud/hourstability remain unverified. Historical pending lines below are superseded by this section.
+- Independent complete script resumed-full-validation.log exits0: Core36,Windows19,oldVolc26,HTTP86,SDK36,WPF26,localhost13checks/10combinations; nativeSDKconstruction/disposal(no recognition) passed. No realcloud/APIkey read. Finalperformance6.93s/40000events/p95.2301ms;61.88secsyntheticsoak passed, nothourstability.
+- Three whole-branch findings fixed and scoped approved (final-rereview.md): Groq instance cooldown survives automatic sessions; Final preempts obsolete preview/debounce and wins queued slots; malformederror metadata preserves terminalstatus/cooldown. AzureChinese aliases normalized.
+- Final portable directory: publish/antiDBT-phase3-win-x64-r4. Same publish command executed twice and generatedr3/r4 with matchingEXESHA A03A5B7B3C42847955A1D27D4A1D3265CACBE48779BED7402FD9BB6942F2B7AF. r1/r2/r3 preserved as candidate/build evidence; use r4.
+- ReleaseWPF26/26; actualnormalfreshconfig launch/Start->settings/Cancel->ready/UIclose,0processes/0windows. Test-created emptydata removed. Known-secret-format/source/log/binary/path scan passed; no realcredentials packaged. See security-scan.json and final-native-ui.json.
+- Local code commits:0dcd810 secureprofiles+SDK;9fec6d4 multiProviders+UI+Finalpriority. Keep localbranch phase3-providers; no push/merge. User explicitly requests persistent records, so ledger retained.
+- Original3978files unchanged; Phase2EXE/ZIP hashes unchanged; Volc protocol algorithms unchanged. Unknowns remain: authenticatedcloud/quality/latency/billing/hoursoak, GooglegRPCwire/Azurenativecloud, full4m45rotation/bridging, cleanVM/DPI/originalvisual. GoogleMTBasiconly/AzureMTglobalonly/systemproxyonly; LiveInterpret gated.
+- FinalZIP: publish/antiDBT-phase3-win-x64-r4.zip,63309287bytes,95files;SHA E7E3B3D5B48FF17FE70FC0A495C456BF40DCA336B596D93DEA2DA04BC53B382D. Latest resumedfullscript exits0,10NU1900/noerrors; security/stagedcodeknownformat scan0matches. Final evidence: final-release-manifest.json/archive-check.json/final-test-summary.json/final-rereview.md.
+
+## Historical execution ledger
+
+- Audited Phase2 docs, actual Core contracts, catalog, settings storage and UI. Current two services are independent; no IPC daemon exists, only in-process events/contracts. Preserve those semantics.
+- Git baseline initialized in prototype. No existing release overwritten. Official SDK protocol research in progress.
+- Decisions: HTTP-based Whisper is segmented final-only; Google MT initially Basic API-key mode, explicitly distinct from service-account STT V2. No fallback. Existing Volc ASR protocol algorithm remains untouched.
+- 2026-10-15 continuation: Task 1/2 implemented; HTTP mock suite originally 56/56. Review identified selected-profile credential substitution, quota retry, cooldown shortening and overlap boundary/gap issues. Behavioral RED saved; fixes awaiting GREEN and scoped re-review.
+- Task 3 implemented with official Azure Speech 1.52.0 / Google Speech V2 1.8.0 SDKs. SDK review fixes approved; SDK-object/gateway suite 36/36, native runtime/cloud acceptance still pending.
+- Task 4 implemented; WPF smoke 20/20. Review requested clearing retained keys on custom-host changes; added synthetic regression and fixes pending resumed verification. Model-list requests now tied to dialog lifetime.
+- Task 5 pending: additional localhost combination tests, full regression, final review, new Phase3 portable release, local development commits and final documentation. Real cloud authentication/quality/long-term stability remain unverified; no real keys requested or read.
+- Resume map: task-sdk-report.md / sdk-rereview.md, task-ui-report.md / ui-review.md, task-http-report.md / http-review.md. Preserve Phase2 publish directory and original Doubao installation.
+- Task 1/2: scoped approval in scoped-rereview.md; Windows19/19 and HTTP64/64 GREEN. Initial post-fix cooldown test had nondeterministic10/20ms return ordering; replaced with two-request barrier/controlled responses, explicit request count. Original RED/failed logs retained.
+- Task 3: SDK36/36, native Azure resource construction/PCM/disposal PASS without recognition start. Commit 0dcd810 contains core errors, secureprofiles and official SDK adapters.
+- Task 4: WPF26/26, scoped UI approval; save/reopen test covers Result roundtrip, DPAPI separately covered by Windows suite. No live model-fetch request.
+- Integration: actuallocalhost13/13 with10pipeline combinations including all7requested; source-first + final identity + HTTPmultipart/MTschemas + VolcWS. Azure/Google use injected SDK gateway, not realgRPCwire/cloud. integration-review.md approved.
+- Full build0errors/8NU1900; Core32/32; oldVolc26/26; performance40000events5.28s/p95.155ms;62.00secsyntheticsoak PASS. New phase3 portable directory published, actual releaseWPF26/26; Sky normal emptyconfig launch/start->settings/cancel/close verified,0remainingprocesses. Test-created emptyconfig removed before packaging.
+- Final whole-branch review currently running. ZIP/manifest and final documentation/commits still pending. Any further code fix requires targeted regression and refreshed release.
+- Whole-branch review completed:3P2 behavioral findings,0critical. One combined fix wave dispatched (task-final-fixes.md): Groq cooldown surviving automatic reconnection; Final preempting obsolete preview/debounce and queued priority; malformed HTTP error metadata preserving status classification. Also map Azure zh aliases to official zh-Hans/zh-Hant (official docs evidence, not empirical service rejection). Current Phase3 directory is pre-fix candidate, final delivery will use a new-r2 directory.
+- Final review acceptance boundaries: realcloud/billing/quality/latency/hoursoak remain unknown; Googlebridging and broaderAdvanced/VNET/Responses/SSE modes remain documented unsupported; dedicatedP1proxy absent (system proxy only); fullregionalpicker/semanticVAD not claimed. Freshness-based bounded drop/drain and same-userDPAPI limits are intentional retained policies.

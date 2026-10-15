@@ -1,6 +1,6 @@
 # 功能完成度与复刻证据
 
-评定日期：2026-10-14。这里的“已验证”指本项目的列明测试，**不等于原版运行一致或真实云服务验收**。不采用无法解释的总体百分比。
+评定日期：2026-10-15。这里的“已验证”指本项目的列明测试，**不等于原版运行一致或真实云服务验收**。不采用无法解释的总体百分比。
 
 第一阶段依据：[功能规格](../../reports/FEATURES-AND-PRIORITIES.md)、[证据索引](../../reports/EVIDENCE-INDEX.md)、[JS01–20](../../analysis/subtitle-source-evidence.md)、[S01–24](../../reports/subtitle-settings.md)、[原生 N](../../reports/native-audio.md)。静态证据不作为实际画面的观测。
 
@@ -25,10 +25,10 @@
 | P1 拖动、置顶、交互区 | 工具栏拖动、文本可范围选择/复制、Topmost 及设置开关；独占全屏/多屏未验 | S；WPF code / own native UI observation |
 | P1 设置面板 | 已实现独立模态设置窗口，API Key/旧认证、资源/地址、设备、显示选项；与原版小浮层的布局/焦点行为不同 | S；desktop-settings.png |
 | P0 错误、重试、关闭 | 状态消息、开始/停止/重试、采集/识别错误、翻译错误、期限 drain；原版独立错误页未逐样复现 | JS17/18、S；Core/Windows tests |
-| P0 可替换 Provider | Core 仅依赖接口；当前产品包含火山 ASR2/MT 两个正式适配器。新增厂商需写适配器并增加设置选择 | Contracts / ProviderCatalog |
+| P0 可替换 Provider | Core 仅依赖接口；4 ASR ×6 MT，独立动态选择；保留原有火山协议 | ProviderCatalog / 多Provider测试 |
 | P0 API 配置与密钥 | 全部通过设置界面；DPAPI CurrentUser、普通 JSON 排除秘密、原子更新及损坏恢复测试通过 | SettingsStore / Windows tests |
 | P0 翻译调度、取消、去重 | 固定 350 ms 合并、2 并发、超时、128 缓存、128 待办、过期拒绝；不合作插件最多16未完成请求 | Core Scheduler tests |
-| P1 上下文管理 | 核心保存最近 final 上下文；当前 MT 公开协议无上下文字段，**不发送也不宣称云端上下文功能复刻** | PROVIDER-SPECS / Scheduler |
+| P1 上下文管理 | 核心保存最近final上下文；豆包/Azure/Google Basic不发送；DeepL/LLM发送有界短上下文，模型行为待实测 | API_PROVIDERS / HttpTranslationProvider |
 | P0 延迟监测 | 已显示最近 1000 样本 p95；ASR 为采集块/服务音频时间估算，MT 为调用时长，非声学到屏幕精确测量 | LatencyMonitor / performance.json |
 | P1 长期稳定 | 有界结构、故障回归及约62秒合成运行通过；数小时真实音频/服务稳定性未验证 | soak.json / known issues |
 | 可选 Seed LiveInterpret 2.0 | 未接入、明确门控；国内原文/译文/增量 protobuf 语义尚未核实 | PROVIDER-SPECS / catalog gate test |
@@ -36,6 +36,20 @@
 | 云内 ASR、VAD、上下文修正和翻译模型 | 使用所选第三方能力；不复用、推断或声称复刻豆包云内部机制 | 第一阶段未知边界 |
 
 ## 后续优先级与责任边界
+
+第三阶段扩展完成度（本地验收）：
+
+| 能力 | 交付 / 本地证据 | 尚未验证或未实现 |
+|---|---|---|
+| Groq Whisper | 真实multipart HTTP + WAV/VAD/Final-only/边界去重/队列丢旧夹具；与6个MT组合 | 云端转写质量、真实延迟/费用、噪声鲁棒性 |
+| Azure Speech | 官方SDK连续识别、Partial/Final、终止清理；SDK对象/会话测试；实际原生资源构建与释放 | 真实Azure事件/认证/长时运行；无Bing网页接口 |
+| Google Speech | 官方V2 gRPC生产代码、配置先发/15k分片/多interim合并/4分45秒取消；SDK对象测试 | 真实gRPC-wire/认证；全时长云端连接；无跨连接词级bridging |
+| 新增MT | DeepL/Azure/Google Basic/Groq/custom真实适配器；86个HTTP故障/协议检查及localhost组合；Azure中文别名 | 云端账户/效果；Advanced OAuth MT、Azure VNET/专用域名未实现 |
+| 多配置与密钥 | v1→v2迁移、独立DPAPI profiles、绑定目的主机、删除/恢复、Windows19项、WPF26项 | 跨机器迁移需重新填写；持久化/编辑UI各按列明证据分层 |
+| 生命周期与UI | 原文优先、修订/过期隔离Core36项，Final抢占旧预览/合并窗口并优先排队；10种真实管线组合；原字幕UI回归 | 没有独立IPC，不能声称新增IPC验收；原版逐像素一致性仍未知 |
+| 便携发布 | 独立r4、自带运行时、WPF26项、真实空配置启动/取消/退出；脚本连续两次生成新编号且保留旧包 | 未在干净虚拟机/其他Windows硬件验证；云API验收不包含在启动测试内 |
+| P1兼容API | Chat Completions、自填模型/提示词/超时/上下文、禁止重定向 | 单独代理设置、Responses/SSE/工具调用未实现；沿用系统代理 |
+| P1长期稳定 | 约62秒合成断线/抖动运行通过 | 数小时真实云/硬件运行未执行 |
 
 1. **P0 真实 API 闭环验收**：用户在软件设置填写自己的 API 配置后，用公开无私人内容的音频核实首字、partial/final、翻译及时性、重切分、停止尾句及额度错误。无需聊天传递密钥。
 2. **P0 真实服务修正样本**：先获同意保留脱敏文本/时间戳测试夹具，再验证累计形状、水位与跨定稿边界；不记录认证头或私人录音。公开协议支持之外的形状目前会错误重连。
