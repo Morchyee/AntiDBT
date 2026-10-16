@@ -103,20 +103,22 @@ try {
     # Generate DEPENDENCIES.json metadata
     $assetsPath = "src/AntiDbt.Desktop/obj/project.assets.json"
     if (Test-Path -LiteralPath $assetsPath) {
-        $assets = Get-Content $assetsPath -Raw | ConvertFrom-Json -AsHashtable
+        $assets = Get-Content $assetsPath -Raw | ConvertFrom-Json
         $dependencies = @()
         if ($assets.libraries) {
-            foreach ($entry in $assets.libraries.GetEnumerator() | Sort-Object Key) {
-                if ($entry.Value.type -ne 'package') { continue }
-                $packageDir = Join-Path $taskRoot ('.packages/' + $entry.Value.path)
-                $legalDir = Join-Path $destination ('licenses/packages/' + $entry.Value.path)
+            $libraryProps = @($assets.libraries.PSObject.Properties)
+            foreach ($prop in $libraryProps | Sort-Object Name) {
+                $val = $prop.Value
+                if ($val.type -ne 'package') { continue }
+                $packageDir = Join-Path $taskRoot ('.packages/' + $val.path)
+                $legalDir = Join-Path $destination ('licenses/packages/' + $val.path)
                 New-Item -ItemType Directory -Path $legalDir -Force | Out-Null
                 if (Test-Path -LiteralPath $packageDir) {
                     $files = @(Get-ChildItem -LiteralPath $packageDir -File | Where-Object { $_.Name -match '^(LICENSE|NOTICE|THIRD.?PARTY)' -or $_.Extension -eq '.nuspec' })
                     foreach ($file in $files) { Copy-Item -LiteralPath $file.FullName -Destination $legalDir }
-                    $dependencies += @{ package = $entry.Key; legalFiles = @($files.Name) }
+                    $dependencies += @{ package = $prop.Name; legalFiles = @($files.Name) }
                 } else {
-                    $dependencies += @{ package = $entry.Key; legalFiles = @() }
+                    $dependencies += @{ package = $prop.Name; legalFiles = @() }
                 }
             }
         }
@@ -142,9 +144,11 @@ try {
         if ($smokeProc.ExitCode -ne 0) {
             throw "Candidate binary smoke test failed with exit code $($smokeProc.ExitCode)"
         }
+        $smokeProc.Close()
         Write-Host "  -> Published binary smoke test passed." -ForegroundColor Green
         if (Test-Path -LiteralPath $smokeDir) { Remove-Item -LiteralPath $smokeDir -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $destination 'data')) { Remove-Item -LiteralPath (Join-Path $destination 'data') -Recurse -Force }
+        Start-Sleep -Milliseconds 800
     }
 
     # 6. Archive and SHA256 Checksums
@@ -156,7 +160,16 @@ try {
     $zipHash = $null
     if (-not $NoZip) {
         if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-        Compress-Archive -Path (Join-Path $destination '*') -DestinationPath $zipPath -Force
+        $retry = 0
+        while ($true) {
+            try {
+                Compress-Archive -Path (Join-Path $destination '*') -DestinationPath $zipPath -Force
+                break
+            } catch {
+                if ($retry++ -ge 5) { throw }
+                Start-Sleep -Seconds 1
+            }
+        }
         $zipHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash
         Write-Host "  -> Archive created: $zipPath" -ForegroundColor Green
     }
