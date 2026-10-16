@@ -420,6 +420,85 @@ await TestAsync("pipeline terminates immediately without retry on fatal quota er
     Check(lastState == PipelineState.Error, $"expected Error state but got {lastState}");
 });
 
+await TestAsync("telemetry collector computes accurate stage quantiles and outcome counts", async () => {
+    await Task.CompletedTask;
+    var collector = new PipelineTelemetryCollector();
+    for (int i = 1; i <= 20; i++)
+    {
+        collector.Record(new SegmentTelemetryRecord
+        {
+            SessionId = 1,
+            SegmentId = $"seg-{i}",
+            Revision = 1,
+            IsFinal = i > 10,
+            Language = "en",
+            QueueWaitMs = i * 2.0,
+            AsrServiceMs = 100.0 + i * 5,
+            MtDebounceWaitMs = 50.0,
+            MtServiceMs = 200.0 + i * 10,
+            UiApplyMs = 5.0,
+            TotalPipelineMs = 350.0 + i * 17,
+            Outcome = i == 20 ? TelemetryOutcome.Failed : (i == 19 ? TelemetryOutcome.CacheHit : (i == 18 ? TelemetryOutcome.Cancelled : TelemetryOutcome.Success))
+        });
+    }
+
+    var summary = collector.Summarize(new()
+    {
+        Asr = new() { Provider = "VolcengineAsr2", Model = "async" },
+        Translation = new() { Provider = "DeepL" },
+        SourceLanguage = "auto",
+        TargetLanguage = "zh-Hans"
+    });
+
+    Check(summary.SampleCount == 20, $"expected 20 samples, got {summary.SampleCount}");
+    Check(summary.FinalCount == 10, $"expected 10 finals, got {summary.FinalCount}");
+    Check(summary.PartialCount == 10, $"expected 10 partials, got {summary.PartialCount}");
+    Check(summary.CacheHitCount == 1, $"expected 1 cache hit, got {summary.CacheHitCount}");
+    Check(summary.CancelledCount == 1, $"expected 1 cancelled, got {summary.CancelledCount}");
+    Check(summary.FailedCount == 1, $"expected 1 failed, got {summary.FailedCount}");
+    Check(Math.Abs(summary.QueueWait.MedianMilliseconds - 21.0) < 1.0, $"queue wait median mismatch: {summary.QueueWait.MedianMilliseconds}");
+    Check(summary.Disclaimer.Contains("端到端耗时测量范围"), "disclaimer should specify scope");
+});
+
+await TestAsync("telemetry export is anonymized without credentials, keys or raw transcripts", async () => {
+    var collector = new PipelineTelemetryCollector();
+    collector.Record(new SegmentTelemetryRecord
+    {
+        SessionId = 1,
+        SegmentId = "secret-segment-id",
+        Revision = 1,
+        IsFinal = true,
+        Language = "en",
+        QueueWaitMs = 10.0,
+        AsrServiceMs = 150.0,
+        MtDebounceWaitMs = 30.0,
+        MtServiceMs = 250.0,
+        UiApplyMs = 8.0,
+        TotalPipelineMs = 448.0,
+        Outcome = TelemetryOutcome.Success
+    });
+
+    var settings = new AppSettings
+    {
+        Asr = new() { Provider = "VolcengineAsr2", ApiKey = "sensitive-asr-key-9988", Model = "async" },
+        Translation = new() { Provider = "OpenAiCompatible", ApiKey = "sensitive-mt-key-7766", Model = "gpt-4o" },
+        SourceLanguage = "en",
+        TargetLanguage = "zh-Hans"
+    };
+
+    var json = collector.ExportJson(settings);
+
+    Check(!json.Contains("sensitive-asr-key-9988"), "export must not contain ASR key");
+    Check(!json.Contains("sensitive-mt-key-7766"), "export must not contain MT key");
+    Check(!json.Contains("secret-segment-id"), "summary export must not contain raw segment content");
+    Check(json.Contains("VolcengineAsr2") && json.Contains("OpenAiCompatible"), "export should record provider names");
+    Check(json.Contains("Disclaimer"), "export should include measurement scope disclaimer");
+
+    var artifactDir = Path.Combine(AppContext.BaseDirectory, "artifacts", "phase5.3");
+    Directory.CreateDirectory(artifactDir);
+    await File.WriteAllTextAsync(Path.Combine(artifactDir, "diagnostic-telemetry-sample.json"), json);
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

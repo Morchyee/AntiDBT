@@ -26,6 +26,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
     public TimeSpan InitialRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMilliseconds(5000);
     public bool ClearStoreOnStart { get; set; }
+    public PipelineTelemetryCollector Telemetry { get; } = new();
     public event Action<PipelineStatus>? StatusChanged;
     public event Action<double>? AudioLevelChanged;
     public Task Completion { get; private set; } = Task.CompletedTask;
