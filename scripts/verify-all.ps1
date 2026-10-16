@@ -28,11 +28,20 @@ try {
     Write-Host " Output: $fullArtifactsDir" -ForegroundColor Gray
     Write-Host "==========================================================" -ForegroundColor Cyan
 
+    # Detect dotnet executable and target framework
+    $dotnetCmd = if (Test-Path "$taskRoot/.dotnet/dotnet.exe") { "$taskRoot/.dotnet/dotnet.exe" } else { "dotnet" }
+    $tfm = "net10.0"
+    $tfmWin = "net10.0-windows"
+    if (-not (Test-Path "$taskRoot/src/AntiDbt.Core/bin/Debug/net10.0")) {
+        $tfm = "net9.0"
+        $tfmWin = "net9.0-windows"
+    }
+
     # 1. Build Solution
-    Write-Host "`n[1/8] Compiling AntiDbt.sln..." -ForegroundColor Yellow
+    Write-Host "`n[1/8] Compiling AntiDbt.sln (using $dotnetCmd, target: $tfm)..." -ForegroundColor Yellow
     $buildArgs = @('build', 'AntiDbt.sln', '-m:1', '-p:UseSharedCompilation=false')
     if ($SkipRestore) { $buildArgs += '--no-restore' }
-    & dotnet @buildArgs *> (Join-Path $fullArtifactsDir "build.log")
+    & $dotnetCmd @buildArgs *> (Join-Path $fullArtifactsDir "build.log")
     if ($LASTEXITCODE -ne 0) { throw "Build failed; inspect $fullArtifactsDir/build.log" }
     Write-Host "  -> Build succeeded." -ForegroundColor Green
 
@@ -52,7 +61,7 @@ try {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = "dotnet"
+        $psi.FileName = $dotnetCmd
         $allArgs = @($ExePath) + $Arguments
         $psi.Arguments = [string]::Join(' ', $allArgs)
         $psi.RedirectStandardOutput = $true
@@ -107,34 +116,34 @@ try {
     }
 
     # 2. Core Unit & Contract Tests
-    Run-Suite -Name "Core" -Category "OfflineUnit" -ExePath "tests/AntiDbt.Core.Tests/bin/Debug/net9.0/AntiDbt.Core.Tests.dll" -Arguments @() -LogName "core.log"
-    $coreSample = "tests/AntiDbt.Core.Tests/bin/Debug/net9.0/artifacts/phase5.3/diagnostic-telemetry-sample.json"
+    Run-Suite -Name "Core" -Category "OfflineUnit" -ExePath "tests/AntiDbt.Core.Tests/bin/Debug/$tfm/AntiDbt.Core.Tests.dll" -Arguments @() -LogName "core.log"
+    $coreSample = "tests/AntiDbt.Core.Tests/bin/Debug/$tfm/artifacts/phase5.3/diagnostic-telemetry-sample.json"
     if (Test-Path -LiteralPath $coreSample) {
         Copy-Item -LiteralPath $coreSample -Destination (Join-Path $fullArtifactsDir "diagnostic-telemetry-sample.json") -Force
     }
 
     # 3. Windows Audio & DPAPI Tests
-    Run-Suite -Name "Windows" -Category "PlatformWindows" -ExePath "tests/AntiDbt.Windows.Tests/bin/Debug/net9.0-windows/AntiDbt.Windows.Tests.dll" -Arguments @() -LogName "windows.log"
+    Run-Suite -Name "Windows" -Category "PlatformWindows" -ExePath "tests/AntiDbt.Windows.Tests/bin/Debug/$tfmWin/AntiDbt.Windows.Tests.dll" -Arguments @() -LogName "windows.log"
 
     # 4. CloudSpeech SDK Contracts & Native Smoke
-    Run-Suite -Name "CloudSpeech" -Category "SdkContracts" -ExePath "tests/AntiDbt.CloudSpeech.Tests/bin/Debug/net9.0/AntiDbt.CloudSpeech.Tests.dll" -Arguments @() -LogName "cloudspeech.log"
-    Run-Suite -Name "CloudSpeech.NativeSmoke" -Category "SdkNativeLoad" -ExePath "tests/AntiDbt.CloudSpeech.Tests/bin/Debug/net9.0/AntiDbt.CloudSpeech.Tests.dll" -Arguments @('--native-smoke') -LogName "cloudspeech-native-smoke.log"
+    Run-Suite -Name "CloudSpeech" -Category "SdkContracts" -ExePath "tests/AntiDbt.CloudSpeech.Tests/bin/Debug/$tfm/AntiDbt.CloudSpeech.Tests.dll" -Arguments @() -LogName "cloudspeech.log"
+    Run-Suite -Name "CloudSpeech.NativeSmoke" -Category "SdkNativeLoad" -ExePath "tests/AntiDbt.CloudSpeech.Tests/bin/Debug/$tfm/AntiDbt.CloudSpeech.Tests.dll" -Arguments @('--native-smoke') -LogName "cloudspeech-native-smoke.log"
 
     # 5. Providers & Localhost Protocol Tests
-    Run-Suite -Name "Providers" -Category "ProviderContracts" -ExePath "tests/AntiDbt.Providers.Tests/bin/Debug/net9.0/AntiDbt.Providers.Tests.dll" -Arguments @() -LogName "providers.log"
-    Run-Suite -Name "Providers.Multi" -Category "ProviderMockFactory" -ExePath "tests/AntiDbt.Providers.Multi.Tests/bin/Debug/net9.0/AntiDbt.Providers.Multi.Tests.dll" -Arguments @() -LogName "providers-multi.log"
-    Run-Suite -Name "Providers.Multi.Localhost" -Category "LocalhostCombinations" -ExePath "tests/AntiDbt.Providers.Multi.Tests/bin/Debug/net9.0/AntiDbt.Providers.Multi.Tests.dll" -Arguments @('--localhost') -LogName "providers-multi-localhost.log"
+    Run-Suite -Name "Providers" -Category "ProviderContracts" -ExePath "tests/AntiDbt.Providers.Tests/bin/Debug/$tfm/AntiDbt.Providers.Tests.dll" -Arguments @() -LogName "providers.log"
+    Run-Suite -Name "Providers.Multi" -Category "ProviderMockFactory" -ExePath "tests/AntiDbt.Providers.Multi.Tests/bin/Debug/$tfm/AntiDbt.Providers.Multi.Tests.dll" -Arguments @() -LogName "providers-multi.log"
+    Run-Suite -Name "Providers.Multi.Localhost" -Category "LocalhostCombinations" -ExePath "tests/AntiDbt.Providers.Multi.Tests/bin/Debug/$tfm/AntiDbt.Providers.Multi.Tests.dll" -Arguments @('--localhost') -LogName "providers-multi-localhost.log"
 
     # 6. Language & Domestic Integration Tests
-    Run-Suite -Name "Language" -Category "LanguageRegistry" -ExePath "tests/AntiDbt.Language.Tests/bin/Debug/net9.0/AntiDbt.Language.Tests.dll" -Arguments @() -LogName "language.log"
-    Run-Suite -Name "Domestic" -Category "DomesticLoopback" -ExePath "tests/AntiDbt.Domestic.Tests/bin/Debug/net9.0/AntiDbt.Domestic.Tests.dll" -Arguments @() -LogName "domestic.log"
-    Run-Suite -Name "Domestic.Offline" -Category "DomesticOffline" -ExePath "tests/AntiDbt.Domestic.Tests/bin/Debug/net9.0/AntiDbt.Domestic.Tests.dll" -Arguments @('--offline') -LogName "domestic-offline.log"
+    Run-Suite -Name "Language" -Category "LanguageRegistry" -ExePath "tests/AntiDbt.Language.Tests/bin/Debug/$tfm/AntiDbt.Language.Tests.dll" -Arguments @() -LogName "language.log"
+    Run-Suite -Name "Domestic" -Category "DomesticLoopback" -ExePath "tests/AntiDbt.Domestic.Tests/bin/Debug/$tfm/AntiDbt.Domestic.Tests.dll" -Arguments @() -LogName "domestic.log"
+    Run-Suite -Name "Domestic.Offline" -Category "DomesticOffline" -ExePath "tests/AntiDbt.Domestic.Tests/bin/Debug/$tfm/AntiDbt.Domestic.Tests.dll" -Arguments @('--offline') -LogName "domestic-offline.log"
 
     # 7. WPF Desktop Smoke Test
     Write-Host "Running Desktop.Smoke [WpfAutomation]..." -ForegroundColor Yellow
     $desktopDir = Join-Path $fullArtifactsDir "desktop-smoke"
     New-Item -ItemType Directory -Path $desktopDir -Force | Out-Null
-    $desktopExe = "$taskRoot/src/AntiDbt.Desktop/bin/Debug/net9.0-windows/antiDBT.exe"
+    $desktopExe = "$taskRoot/src/AntiDbt.Desktop/bin/Debug/$tfmWin/antiDBT.exe"
     $desktopLog = Join-Path $desktopDir "desktop-console.log"
     $desktopSw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -194,14 +203,14 @@ try {
     }
 
     # 8. Diagnostics & Optional Soak / Tone
-    Run-Suite -Name "Diagnostics.Performance" -Category "SyntheticPerformance" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/net9.0-windows/AntiDbt.Diagnostics.dll" -Arguments @() -LogName "diagnostics-performance.log"
+    Run-Suite -Name "Diagnostics.Performance" -Category "SyntheticPerformance" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/$tfmWin/AntiDbt.Diagnostics.dll" -Arguments @() -LogName "diagnostics-performance.log"
 
     if ($Soak) {
-        Run-Suite -Name "Diagnostics.Soak" -Category "SyntheticSoak" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/net9.0-windows/AntiDbt.Diagnostics.dll" -Arguments @('--soak') -LogName "diagnostics-soak.log"
+        Run-Suite -Name "Diagnostics.Soak" -Category "SyntheticSoak" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/$tfmWin/AntiDbt.Diagnostics.dll" -Arguments @('--soak') -LogName "diagnostics-soak.log"
     }
 
     if ($HardwareTone) {
-        Run-Suite -Name "Diagnostics.HardwareTone" -Category "HardwareAudioLoopback" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/net9.0-windows/AntiDbt.Diagnostics.dll" -Arguments @('--tone-capture') -LogName "diagnostics-hardware-tone.log"
+        Run-Suite -Name "Diagnostics.HardwareTone" -Category "HardwareAudioLoopback" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/$tfmWin/AntiDbt.Diagnostics.dll" -Arguments @('--tone-capture') -LogName "diagnostics-hardware-tone.log"
     }
 
     # Summary Report
