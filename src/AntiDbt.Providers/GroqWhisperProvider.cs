@@ -16,7 +16,7 @@ public sealed class GroqWhisperProvider(HttpClient? testClient = null) : IAsrPro
     sealed class Session : IAsrSession
     {
         readonly AsrConfiguration config;readonly ProviderHttp http;readonly Uri endpoint;
-        readonly Channel<Job> jobs=Channel.CreateBounded<Job>(new BoundedChannelOptions(4){FullMode=BoundedChannelFullMode.DropOldest,SingleReader=true});
+        readonly Channel<Job> jobs=Channel.CreateBounded<Job>(new BoundedChannelOptions(4){FullMode=BoundedChannelFullMode.Wait,SingleReader=true});
         readonly Channel<AsrResult> results=Channel.CreateBounded<AsrResult>(new BoundedChannelOptions(256){FullMode=BoundedChannelFullMode.Wait,SingleReader=true});
         readonly CancellationTokenSource stop=new();readonly object gate=new();
         readonly List<byte[]> active=[];readonly Queue<byte[]> pre=[];byte[] remainder=[];
@@ -69,8 +69,16 @@ public sealed class GroqWhisperProvider(HttpClient? testClient = null) : IAsrPro
             if (newFrames > 0 && voiced >= 15)
             {
                 var job = new Job(active.SelectMany(x => x).ToArray(), activeStart, frame * .01, overlap, ++id);
-                if (!jobs.Writer.TryWrite(job))
-                    Interlocked.Increment(ref droppedJobs);
+                while (!jobs.Writer.TryWrite(job))
+                {
+                    if (jobs.Reader.TryRead(out _))
+                        Interlocked.Increment(ref droppedJobs);
+                    else
+                    {
+                        Interlocked.Increment(ref droppedJobs);
+                        break;
+                    }
+                }
             }
             var tail = continuation && overlapFrames > 0 ? active.TakeLast(overlapFrames).ToArray() : [];
             active.Clear();active.AddRange(tail);activeStart=(frame-tail.Length)*.01;overlap=tail.Length>0;newFrames=0;voiced=0;silence=0;

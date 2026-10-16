@@ -72,10 +72,39 @@ await Check("ASR official type 15 layout decodes error code and classifies Confi
         Assert(ex.InnerException is ProviderException pe && pe.Kind == ProviderErrorKind.Configuration, "official error packet classifies Configuration");
     }
 });
+await Check("Groq Whisper dropped jobs accurately counted under backpressure", async () => {
+    using var handler = new TestBlockedHttpHandler();
+    using var client = new HttpClient(handler);
+    await using var groq = new GroqWhisperProvider(client).CreateSession(new() { Endpoint = "http://localhost/transcriptions", ApiKey = "fixture", Model = "whisper-large-v3", Language = "en" });
+    await groq.ConnectAsync(default);
+    var pcm = new byte[32000 * 4];
+    for (int i = 0; i < pcm.Length; i += 2) BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i), 10000);
+    for (int i = 0; i < 10; i++) await groq.SendAudioAsync(pcm, default);
+    await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    var kind = groq.GetType();
+    var jobs = kind.GetField("jobs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(groq)!;
+    var reader = jobs.GetType().GetProperty("Reader")!.GetValue(jobs)!;
+    int pending = (int)reader.GetType().GetProperty("Count")!.GetValue(reader)!;
+    long emitted = (long)kind.GetField("id", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(groq)!;
+    long reported = (long)kind.GetProperty("DroppedJobs")!.GetValue(groq)!;
+    long expectedDropped = emitted - pending - 1;
+    Assert(reported == expectedDropped && reported >= 5, $"DroppedJobs must match actual drops ({expectedDropped}), got {reported}");
+});
 await ReviewCases.Run(address, Check);
 await app.StopAsync(); await app.DisposeAsync();
 var artifact=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../../artifacts/provider-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact,JsonSerializer.Serialize(new {scope="localhost HTTP and WebSocket only; no cloud calls",redEvidence="tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); review-red.json records six review regressions; language-red.json records official language aliases; suffix-red.json records unchanged provisional prefix; initial red.log is build-only",tests=outcomes},new JsonSerializerOptions{WriteIndented=true}));
 if(outcomes.Any(o=>o.GetType().GetProperty("passed")!.GetValue(o) is false)) Environment.ExitCode=1;
+
+sealed class TestBlockedHttpHandler : HttpMessageHandler
+{
+    public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+    {
+        Started.TrySetResult();
+        await Task.Delay(Timeout.Infinite, token);
+        throw new InvalidOperationException();
+    }
+}
 
 
 

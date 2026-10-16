@@ -106,7 +106,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     var generation = Store.BeginSession(ClearStoreOnStart && first);
                     first = false;
                     Publish(PipelineState.Listening, "正在聆听系统音频");
-                    var anchors = new List<(double End, long Timestamp)>();
+                    var anchors = new List<(double End, long Timestamp, long Discontinuities)>();
                     var timelineLock = new object();
                     double sentSeconds = 0;
                     bool receivedResult = false;
@@ -119,9 +119,12 @@ public sealed class CaptionPipeline : IAsyncDisposable
                             await reader;
                             throw new IOException("Recognition stream ended unexpectedly.");
                         }
-                        int trimmed = _queue.TrimStale(TimeSpan.FromSeconds(2.0));
-                        if (trimmed > 0)
-                            Publish(PipelineState.Listening, $"正在聆听系统音频（跳过 {trimmed} 块过期积压）");
+                        if (!_stopRequested)
+                        {
+                            int trimmed = _queue.TrimStale(TimeSpan.FromSeconds(2.0));
+                            if (trimmed > 0)
+                                Publish(PipelineState.Listening, $"正在聆听系统音频（跳过 {trimmed} 块过期积压）");
+                        }
 
                         AudioChunk? chunk = null;
                         if (!_queue.TryDequeue(out chunk))
@@ -147,7 +150,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                         sentSeconds += chunk.AudioDuration.TotalSeconds;
                         lock (timelineLock)
                         {
-                            anchors.Add((sentSeconds, chunk.CapturedTimestamp));
+                            anchors.Add((sentSeconds, chunk.CapturedTimestamp, _queue.Discontinuities));
                             if (anchors.Count > 1000)
                                 anchors.RemoveAt(0);
                         }
@@ -281,7 +284,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 Publish(PipelineState.Stopped, "已停止");
         }
     }
-    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp)> anchors, object timelineLock, CancellationTokenSource connection, Action? onResult = null)
+    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp, long Discontinuities)> anchors, object timelineLock, CancellationTokenSource connection, Action? onResult = null)
     {
         try
         {
@@ -298,16 +301,21 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 if (segment is null)
                     continue;
                 long? audioEnd = null;
+                bool isDiscontinuous = false;
                 lock (timelineLock)
                 {
                     var match = anchors.FirstOrDefault(x => x.End >= result.AudioEnd.TotalSeconds);
                     if (match.Timestamp != 0)
+                    {
                         audioEnd = match.Timestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
+                        if (anchors.Count > 0 && match.Discontinuities != anchors[0].Discontinuities)
+                            isDiscontinuous = true;
+                    }
                 }
-                if (audioEnd is { } timestamp)
+                if (audioEnd is { } timestamp && !isDiscontinuous)
                 {
                     var elapsed = Stopwatch.GetElapsedTime(timestamp);
-                    if (elapsed >= TimeSpan.Zero && elapsed <= TimeSpan.FromSeconds(30))
+                    if (elapsed >= TimeSpan.Zero)
                         AsrLatency.Record(elapsed);
                 }
                 _translations.Schedule(segment);

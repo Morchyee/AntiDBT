@@ -336,14 +336,16 @@ await TestAsync("pipeline freshness policy bounds audio age during reconnection"
     await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
     await p.StartAsync();
 
-    for (int i = 0; i < 8; i++)
+    // Push 65 chunks into queue with capacity 50 while ASR is reconnecting
+    for (int i = 0; i < 65; i++)
     {
-        _ = p.AudioStats;
+        audio.Push();
     }
-    audio.Push();
     audio.Finish();
     await p.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-    Check(p.AudioStats.DroppedChunks >= 0, "stats reporting failed");
+
+    Check(p.AudioStats.DroppedChunks == 15, $"expected exactly 15 dropped chunks for 65 chunks in cap 50, got {p.AudioStats.DroppedChunks}");
+    Check(p.AudioStats.Discontinuities >= 1, $"expected at least 1 discontinuity event, got {p.AudioStats.Discontinuities}");
 });
 
 await TestAsync("pipeline retry budget exhausted when send succeeds but read fails repeatedly", async () => {
