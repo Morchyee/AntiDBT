@@ -1,4 +1,5 @@
 param(
+    [string]$TargetFramework,
     [switch]$SkipRestore,
     [switch]$Soak,
     [switch]$HardwareTone,
@@ -22,20 +23,20 @@ try {
     $commit = git rev-parse HEAD
     $branch = git branch --show-current
 
+    # Detect dotnet executable and target framework directly from project evaluation
+    $dotnetCmd = if (Test-Path "$taskRoot/.dotnet/dotnet.exe") { "$taskRoot/.dotnet/dotnet.exe" } else { "dotnet" }
+    $coreProjXml = [xml](Get-Content (Join-Path $taskRoot 'src/AntiDbt.Core/AntiDbt.Core.csproj'))
+    $projTfm = $coreProjXml.Project.PropertyGroup.TargetFramework
+    $tfm = if (-not [string]::IsNullOrWhiteSpace($TargetFramework)) { $TargetFramework } elseif (-not [string]::IsNullOrWhiteSpace($projTfm)) { $projTfm } else { "net10.0" }
+    $tfmWin = "$tfm-windows"
+
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host " antiDBT Phase 5.3 Unified Verification Suite" -ForegroundColor Cyan
     Write-Host " Commit: $commit ($branch)" -ForegroundColor Gray
+    Write-Host " Target: $tfm ($tfmWin)" -ForegroundColor Gray
+    Write-Host " SDK:    $((& $dotnetCmd --version).Trim())" -ForegroundColor Gray
     Write-Host " Output: $fullArtifactsDir" -ForegroundColor Gray
     Write-Host "==========================================================" -ForegroundColor Cyan
-
-    # Detect dotnet executable and target framework
-    $dotnetCmd = if (Test-Path "$taskRoot/.dotnet/dotnet.exe") { "$taskRoot/.dotnet/dotnet.exe" } else { "dotnet" }
-    $tfm = "net10.0"
-    $tfmWin = "net10.0-windows"
-    if (-not (Test-Path "$taskRoot/src/AntiDbt.Core/bin/Debug/net10.0")) {
-        $tfm = "net9.0"
-        $tfmWin = "net9.0-windows"
-    }
 
     # 1. Build Solution
     Write-Host "`n[1/8] Compiling AntiDbt.sln (using $dotnetCmd, target: $tfm)..." -ForegroundColor Yellow
@@ -46,6 +47,23 @@ try {
     Write-Host "  -> Build succeeded." -ForegroundColor Green
 
     $suiteResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    function Write-SummaryJson {
+        $summary = [PSCustomObject]@{
+            Timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+            Commit = $commit
+            Branch = $branch
+            TargetFramework = $tfm
+            DotnetSdk = (& $dotnetCmd --version).Trim()
+            TotalSuites = $suiteResults.Count
+            PassedSuites = @($suiteResults | Where-Object { $_.Passed }).Count
+            FailedSuites = @($suiteResults | Where-Object { -not $_.Passed }).Count
+            TotalDurationSeconds = [Math]::Round(($suiteResults | Measure-Object -Property DurationSeconds -Sum).Sum, 3)
+            Suites = $suiteResults
+        }
+        $summaryJson = $summary | ConvertTo-Json -Depth 4
+        Set-Content -LiteralPath (Join-Path $fullArtifactsDir "verification-summary.json") -Value $summaryJson -Encoding utf8
+    }
 
     function Run-Suite {
         param(
@@ -63,7 +81,8 @@ try {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = $dotnetCmd
         $allArgs = @($ExePath) + $Arguments
-        $psi.Arguments = [string]::Join(' ', $allArgs)
+        $quotedArgs = $allArgs | ForEach-Object { if ($_ -match '\s' -and -not ($_.StartsWith('"') -and $_.EndsWith('"'))) { "`"$_`"" } else { $_ } }
+        $psi.Arguments = [string]::Join(' ', $quotedArgs)
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.UseShellExecute = $false
@@ -88,6 +107,7 @@ try {
                 DurationSeconds = [Math]::Round($sw.Elapsed.TotalSeconds, 3)
                 Log = $LogName
             })
+            Write-SummaryJson
             throw $timeoutMsg
         }
 
@@ -109,6 +129,7 @@ try {
             DurationSeconds = [Math]::Round($sw.Elapsed.TotalSeconds, 3)
             Log = $LogName
         })
+        Write-SummaryJson
 
         if (-not $passed) {
             throw "Suite $Name failed with exit code $exitCode. Log: $logFile"
@@ -176,6 +197,7 @@ try {
             DurationSeconds = [Math]::Round($desktopSw.Elapsed.TotalSeconds, 3)
             Log = "desktop-smoke/desktop-smoke.json"
         })
+        Write-SummaryJson
         throw $timeoutMsg
     }
 
@@ -195,6 +217,7 @@ try {
         DurationSeconds = [Math]::Round($desktopSw.Elapsed.TotalSeconds, 3)
         Log = "desktop-smoke/desktop-smoke.json"
     })
+    Write-SummaryJson
     if (-not $desktopPassed) {
         $errFile = Join-Path $desktopDir "desktop-smoke-error.txt"
         $errDetails = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { $stderr }
@@ -214,19 +237,7 @@ try {
     }
 
     # Summary Report
-    $summary = [PSCustomObject]@{
-        Timestamp = $timestamp
-        Commit = $commit
-        Branch = $branch
-        TotalSuites = $suiteResults.Count
-        PassedSuites = @($suiteResults | Where-Object { $_.Passed }).Count
-        FailedSuites = @($suiteResults | Where-Object { -not $_.Passed }).Count
-        TotalDurationSeconds = [Math]::Round(($suiteResults | Measure-Object -Property DurationSeconds -Sum).Sum, 3)
-        Suites = $suiteResults
-    }
-
-    $summaryJson = $summary | ConvertTo-Json -Depth 4
-    Set-Content -LiteralPath (Join-Path $fullArtifactsDir "verification-summary.json") -Value $summaryJson -Encoding utf8
+    Write-SummaryJson
 
     Write-Host "`n==========================================================" -ForegroundColor Cyan
     Write-Host " All $($suiteResults.Count) Verification Suites Passed Successfully!" -ForegroundColor Green
