@@ -75,7 +75,11 @@ public sealed class SubtitleStore
 
                 if (!string.IsNullOrWhiteSpace(result.Text) && old is not null)
                 {
-                    if (IsCompatibleDraft(old.SourceText, result.Text))
+                    bool draftNotExpired = old.TranslatedTimestamp is not null
+                        ? Stopwatch.GetElapsedTime(old.TranslatedTimestamp.Value) < TimeSpan.FromSeconds(5)
+                        : (result.Revision - old.TranslationRevision) <= 3;
+
+                    if (draftNotExpired && IsCompatibleDraft(old.SourceText, result.Text))
                     {
                         provisionalTranslation = old.TranslationText.Length > 0 ? old.TranslationText : old.ProvisionalTranslationText;
                         provisionalRevision = old.TranslationRevision;
@@ -173,7 +177,49 @@ public sealed class SubtitleStore
         return true;
     }
 
-    internal static bool IsCompatibleDraft(string oldSource, string newSource)
+    private static readonly string[] s_negationWords = [
+        "not", "no", "never", "neither", "nor", "none",
+        "don't", "doesn't", "didn't", "won't", "wouldn't", "can't", "cannot",
+        "couldn't", "shouldn't", "isn't", "aren't", "wasn't", "weren't",
+        "without", "nowhere", "nothing", "nobody", "hardly", "barely"
+    ];
+
+    private static readonly char[] s_cjkNegationChars = ['不', '没', '未', '无', '非', '别', '否'];
+
+    private static bool IsCjk(char c) =>
+        (c >= 0x4E00 && c <= 0x9FFF) ||
+        (c >= 0x3400 && c <= 0x4DBF) ||
+        (c >= 0x3040 && c <= 0x309F) ||
+        (c >= 0x30A0 && c <= 0x30FF) ||
+        (c >= 0xAC00 && c <= 0xD7AF);
+
+    private static bool ContainsReversalTokens(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        foreach (var c in s_cjkNegationChars)
+        {
+            if (text.Contains(c))
+                return true;
+        }
+
+        var words = text.Split(
+            [' ', ',', '.', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\r', '\n', '\t'],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var word in words)
+        {
+            foreach (var neg in s_negationWords)
+            {
+                if (string.Equals(word, neg, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    public static bool IsCompatibleDraft(string oldSource, string newSource)
     {
         if (string.IsNullOrWhiteSpace(oldSource) || string.IsNullOrWhiteSpace(newSource))
             return false;
@@ -183,38 +229,31 @@ public sealed class SubtitleStore
         if (cleanOld.Length == 0 || cleanNew.Length == 0)
             return false;
 
-        // 1. Exact match or true prefix extension (e.g. "Hello" -> "Hello world")
-        if (cleanNew.StartsWith(cleanOld, StringComparison.OrdinalIgnoreCase))
+        // Converting a statement to a question (or vice versa) changes semantic role
+        bool oldIsQuestion = oldSource.TrimEnd().EndsWith('?') || oldSource.TrimEnd().EndsWith('？');
+        bool newIsQuestion = newSource.TrimEnd().EndsWith('?') || newSource.TrimEnd().EndsWith('？');
+        if (newIsQuestion != oldIsQuestion)
+            return false;
+
+        // Exact match
+        if (string.Equals(cleanOld, cleanNew, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // 2. High-similarity refinement for longer sentences (e.g. ASR refined a single word in a full sentence)
-        // Short phrases (e.g. "turn left" -> "turn right") have high relative change and are incompatible.
-        int maxLen = Math.Max(cleanOld.Length, cleanNew.Length);
-        if (maxLen >= 20)
-        {
-            int lcs = LongestCommonSubsequenceLength(cleanOld, cleanNew);
-            if ((double)lcs / maxLen >= 0.75)
-                return true;
-        }
+        // Strict prefix extension: newSource must strictly start with cleanOld
+        if (!cleanNew.StartsWith(cleanOld, StringComparison.OrdinalIgnoreCase))
+            return false;
 
-        return false;
-    }
+        // Must respect word boundary: cannot extend in the middle of a Latin/alphanumeric word (e.g. cat -> category)
+        char nextChar = cleanNew[cleanOld.Length];
+        char lastOldChar = cleanOld[^1];
+        if (!char.IsWhiteSpace(nextChar) && !char.IsPunctuation(nextChar) && !IsCjk(nextChar) && !IsCjk(lastOldChar))
+            return false;
 
-    private static int LongestCommonSubsequenceLength(string a, string b)
-    {
-        int n = a.Length, m = b.Length;
-        var prev = new int[m + 1];
-        var curr = new int[m + 1];
-        for (int i = 1; i <= n; i++)
-        {
-            char ca = char.ToLowerInvariant(a[i - 1]);
-            for (int j = 1; j <= m; j++)
-            {
-                char cb = char.ToLowerInvariant(b[j - 1]);
-                curr[j] = (ca == cb) ? prev[j - 1] + 1 : Math.Max(prev[j], curr[j - 1]);
-            }
-            Array.Copy(curr, prev, m + 1);
-        }
-        return prev[m];
+        // The newly appended extension must not introduce negation or reversal words
+        string extension = cleanNew[cleanOld.Length..];
+        if (ContainsReversalTokens(extension))
+            return false;
+
+        return true;
     }
 }

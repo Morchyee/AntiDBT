@@ -578,6 +578,93 @@ await TestAsync("permanent reader error is preserved and not replaced by concurr
     Check(statuses.LastOrDefault() == "Error", $"last state should be Error, got {statuses.LastOrDefault()}");
 });
 
+Test("incompatible long revision with negation does not retain old translation", () => {
+    var s = new SubtitleStore();
+    var generation = s.BeginSession();
+    const string before = "I really do want to go there today.";
+    const string after = "I really do not want to go there today.";
+    s.ApplySource(generation, Speech(before, 1, "negation"));
+    s.ApplyTranslation(generation, "negation", 1, "我今天确实想去那里。");
+    s.ApplySource(generation, Speech(after, 2, "negation"));
+    Check(s.Snapshot()[0].ProvisionalTranslationText == "", "incompatible negation revision should clear provisional translation");
+    Check(SubtitleProjection.Expanded(s.Snapshot())[0].Translation == "", "visible translation should be empty rather than showing old affirmative translation");
+});
+
+Test("semantic changes (direction, numbers, entity, units) reject old draft", () => {
+    Check(!SubtitleStore.IsCompatibleDraft("Turn left at the next street", "Turn right at the next street"), "direction change should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("There are 5 apples on the table", "There are 6 apples on the table"), "number change should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("John called me yesterday afternoon", "Jack called me yesterday afternoon"), "entity change should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("The station is 10 km away from here", "The station is 10 miles away from here"), "unit change should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("cat", "category"), "word fragment extension should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("You know the secret.", "You know the secret?"), "statement to question should be incompatible");
+    Check(!SubtitleStore.IsCompatibleDraft("I want to go", "I want to go nowhere"), "suffix with negation token should be incompatible");
+    Check(SubtitleStore.IsCompatibleDraft("Hello world", "Hello world this is a test"), "legitimate word-boundary prefix extension should be compatible");
+});
+
+Test("multisegment paragraph retry points to failed segment not successful segment", () => {
+    var s = new SubtitleStore();
+    var generation = s.BeginSession();
+    s.ApplySource(generation, Speech("First sentence.", 1, "failed-A", final: true, start: 0));
+    s.ApplyTranslationError(generation, "failed-A", 1, "network failure");
+    s.ApplySource(generation, Speech("Second sentence.", 1, "successful-B", final: true, start: 1000));
+    s.ApplyTranslation(generation, "successful-B", 1, "第二句。");
+    var paragraphs = SubtitleProjection.Expanded(s.Snapshot(), generation);
+    Check(paragraphs.Count == 1, "expected 1 joined paragraph");
+    var p = paragraphs.Single();
+    Check(p.HasError, "paragraph must report error");
+    Check(p.CanRetry, "paragraph must allow retry");
+    Check(p.SegmentId == "failed-A", $"paragraph retry must point to failed segment 'failed-A', got '{p.SegmentId}'");
+    Check(p.SessionId == generation, "session id mismatch");
+});
+
+Test("multisegment paragraph retry ignores old session failure for retry eligibility", () => {
+    var s = new SubtitleStore();
+    var oldSession = s.BeginSession();
+    s.ApplySource(oldSession, Speech("Old failure.", 1, "old-A", final: true, start: 0));
+    s.ApplyTranslationError(oldSession, "old-A", 1, "timeout");
+    var newSession = s.BeginSession(false);
+    s.ApplySource(newSession, Speech("New success.", 1, "new-B", final: true, start: 5000));
+    s.ApplyTranslation(newSession, "new-B", 1, "新成功。");
+    var paragraphs = SubtitleProjection.Expanded(s.Snapshot(), newSession);
+    Check(paragraphs.Count == 2, "expected 2 paragraphs across sessions");
+    Check(paragraphs[0].HasError && !paragraphs[0].CanRetry, "old session paragraph must not be retryable in new session");
+    Check(!paragraphs[1].HasError && !paragraphs[1].CanRetry, "new session paragraph without error must not be retryable");
+});
+
+await TestAsync("pipeline retry translation enforces session, revision, final, and cooldown", async () => {
+    var audio = new TestAudioSource();
+    var asr = new TestAsrProvider();
+    var translator = new CountingTranslator();
+    await using var p = new CaptionPipeline(audio, asr, translator, new());
+    long session = p.Store.BeginSession();
+
+    // 1. Success row cannot be retried
+    p.Store.ApplySource(session, Speech("Good morning", 1, "seg1", final: true));
+    p.Store.ApplyTranslation(session, "seg1", 1, "早上好");
+    Check(!p.RetryTranslation(session, "seg1", 1), "successful row should be rejected by RetryTranslation");
+
+    // 2. Row without error cannot be retried
+    p.Store.ApplySource(session, Speech("Pending row", 1, "seg2", final: true));
+    Check(!p.RetryTranslation(session, "seg2", 1), "row without error should be rejected by RetryTranslation");
+
+    // 3. Failed final row can be retried
+    p.Store.ApplySource(session, Speech("Error row", 1, "seg3", final: true));
+    p.Store.ApplyTranslationError(session, "seg3", 1, "503 service unavailable");
+    Check(p.RetryTranslation(session, "seg3", 1), "failed final row should be accepted by RetryTranslation");
+
+    // 4. Immediate second retry within cooldown is rejected
+    p.Store.ApplyTranslationError(session, "seg3", 1, "503 service unavailable again");
+    Check(!p.RetryTranslation(session, "seg3", 1), "immediate retry within 2-second cooldown should be rejected");
+
+    // 5. Older revision cannot be retried when newer revision exists
+    p.Store.ApplySource(session, Speech("Error row updated", 2, "seg3", final: true));
+    p.Store.ApplyTranslationError(session, "seg3", 2, "503 again");
+    Check(!p.RetryTranslation(session, "seg3", 1), "older revision must be rejected when newer revision exists");
+
+    // 6. Wrong session cannot be retried
+    Check(!p.RetryTranslation(session + 99, "seg3", 2), "different session must be rejected");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

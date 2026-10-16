@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 namespace AntiDbt.Core;
 public enum PipelineState
@@ -13,6 +14,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
     private volatile bool _stopRequested, _captureEnded; private bool _disposed;
     private readonly SemaphoreSlim _stopGate = new(1, 1); private bool _stopCompleted; private volatile bool _stopAttempted;
     private readonly SemaphoreSlim _disposeGate = new(1, 1); private bool _disposalStarted;
+    private readonly ConcurrentDictionary<string, long> _retryCooldowns = new();
     public SubtitleStore Store
     {
         get;
@@ -321,21 +323,56 @@ public sealed class CaptionPipeline : IAsyncDisposable
     {
         if (session != Store.CurrentSession)
             return false;
+
+        var snapshot = Store.Snapshot();
         CaptionSegment? target = null;
-        foreach (var row in Store.Snapshot())
+        bool hasNewerRevision = false;
+
+        foreach (var row in snapshot)
         {
-            if (row.SessionId == session && row.SegmentId == segmentId && row.Revision == revision && row.IsFinal)
+            if (row.SessionId == session && row.SegmentId == segmentId)
             {
-                target = row;
-                break;
+                if (row.Revision == revision && row.IsFinal)
+                {
+                    target = row;
+                }
+                else if (row.Revision > revision)
+                {
+                    hasNewerRevision = true;
+                }
             }
         }
-        if (target is null || string.IsNullOrWhiteSpace(target.SourceText))
+
+        if (target is null || hasNewerRevision || string.IsNullOrWhiteSpace(target.SourceText))
             return false;
+
+        // Normal successful rows or rows without error cannot be retried
+        if (target.TranslationText.Length > 0 || string.IsNullOrEmpty(target.TranslationError))
+            return false;
+
+        // Cooldown check (2 seconds per segment)
+        string cooldownKey = $"{session}:{segmentId}";
+        long now = Stopwatch.GetTimestamp();
+        if (_retryCooldowns.TryGetValue(cooldownKey, out var lastRetryTicks))
+        {
+            if (Stopwatch.GetElapsedTime(lastRetryTicks, now) < TimeSpan.FromSeconds(2))
+                return false;
+        }
+
+        _retryCooldowns[cooldownKey] = now;
+
         if (!Store.ClearTranslationError(session, segmentId, revision))
             return false;
-        _translations.Schedule(target with { TranslationError = null });
-        return true;
+
+        try
+        {
+            _translations.Schedule(target with { TranslationError = null });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
     public Task StopAsync(CancellationToken token) => StopAsync(StopReason.UserStop, token);
     public async Task StopAsync(StopReason reason = StopReason.UserStop, CancellationToken token = default)

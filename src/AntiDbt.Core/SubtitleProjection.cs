@@ -17,7 +17,7 @@ public sealed record SubtitleParagraph(
 
 public static class SubtitleProjection
 {
-    public static SubtitleParagraph Compact(IReadOnlyList<CaptionSegment> rows)
+    public static SubtitleParagraph Compact(IReadOnlyList<CaptionSegment> rows, long currentSession = 0)
     {
         if (rows.Count == 0)
             return new("", "");
@@ -38,10 +38,10 @@ public static class SubtitleProjection
             next = row;
         }
         tail.Reverse();
-        return Join(tail);
+        return Join(tail, currentSession);
     }
 
-    public static IReadOnlyList<SubtitleParagraph> Expanded(IReadOnlyList<CaptionSegment> rows)
+    public static IReadOnlyList<SubtitleParagraph> Expanded(IReadOnlyList<CaptionSegment> rows, long currentSession = 0)
     {
         var result = new List<SubtitleParagraph>();
         var group = new List<CaptionSegment>();
@@ -50,7 +50,7 @@ public static class SubtitleProjection
         {
             if (group.Count > 0 && ShouldStartNewParagraph(row, group[^1], currentLength))
             {
-                result.Add(Join(group));
+                result.Add(Join(group, currentSession));
                 group.Clear();
                 currentLength = 0;
             }
@@ -58,17 +58,23 @@ public static class SubtitleProjection
             currentLength += row.SourceText.Length;
         }
         if (group.Count > 0)
-            result.Add(Join(group));
+            result.Add(Join(group, currentSession));
         return result.Where(x => !string.IsNullOrWhiteSpace(x.Source)).ToArray();
     }
 
-    private static SubtitleParagraph Join(IEnumerable<CaptionSegment> rows)
+    private static SubtitleParagraph Join(IEnumerable<CaptionSegment> rows, long currentSession = 0)
     {
         var list = rows as IList<CaptionSegment> ?? rows.ToList();
         var last = list.Count > 0 ? list[^1] : null;
         var hasPending = list.Any(x => x.TranslationText.Length == 0 && !string.IsNullOrWhiteSpace(x.SourceText) && string.IsNullOrEmpty(x.TranslationError));
-        var firstError = list.FirstOrDefault(x => !string.IsNullOrEmpty(x.TranslationError))?.TranslationError;
-        var canRetry = list.Any(x => !string.IsNullOrEmpty(x.TranslationError) && x.IsFinal);
+
+        var errorSegment = list.FirstOrDefault(x => !string.IsNullOrEmpty(x.TranslationError) && x.IsFinal)
+            ?? list.FirstOrDefault(x => !string.IsNullOrEmpty(x.TranslationError));
+        var target = errorSegment ?? last;
+
+        var firstError = errorSegment?.TranslationError;
+        var isCurrentSession = currentSession == 0 || (target is not null && target.SessionId == currentSession);
+        var canRetry = isCurrentSession && list.Any(x => !string.IsNullOrEmpty(x.TranslationError) && x.IsFinal);
 
         var source = JoinTexts(list.Select(x => x.SourceText));
         var translation = string.IsNullOrWhiteSpace(source)
@@ -80,9 +86,9 @@ public static class SubtitleProjection
             translation,
             hasPending,
             firstError,
-            last?.SessionId ?? 0,
-            last?.SegmentId ?? "",
-            last?.Revision ?? 0,
+            target?.SessionId ?? 0,
+            target?.SegmentId ?? "",
+            target?.Revision ?? 0,
             canRetry);
     }
 

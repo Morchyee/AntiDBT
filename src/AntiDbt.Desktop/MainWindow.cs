@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -894,14 +895,14 @@ public sealed class MainWindow : Window
         }
 
         var rows = store.Snapshot();
-        var text = SubtitleProjection.Compact(rows);
+        var text = SubtitleProjection.Compact(rows, store.CurrentSession);
         source.Text = text.Source.Length > 0 ? text.Source : UiText.PlaceholderSource;
         target.Text = text.Source.Length > 0 && text.Translation.Length > 0 ? text.Translation : (rows.Count > 0 ? "" : UiText.PlaceholderTarget);
 
         compact.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         history.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        var updated = SubtitleProjection.Expanded(rows);
+        var updated = SubtitleProjection.Expanded(rows, store.CurrentSession);
         for (int i = 0; i < updated.Count; i++)
         {
             if (i >= paragraphs.Count)
@@ -978,6 +979,7 @@ public sealed class MainWindow : Window
         retryBtn.SetValue(Button.PaddingProperty, new Thickness(6, 1, 6, 1));
         retryBtn.SetValue(Button.MarginProperty, new Thickness(6, 0, 0, 0));
         retryBtn.SetValue(Button.VerticalAlignmentProperty, VerticalAlignment.Center);
+        retryBtn.SetBinding(UIElement.IsEnabledProperty, new Binding(nameof(SubtitleParagraph.CanRetry)));
         retryBtn.AddHandler(Button.ClickEvent, new RoutedEventHandler((sender, _) =>
         {
             if (sender is FrameworkElement fe && fe.DataContext is SubtitleParagraph p && p.CanRetry)
@@ -1024,7 +1026,7 @@ public sealed class MainWindow : Window
 
     void UpdateStatusDisplay()
     {
-        var hasTranslationError = paragraphs.Any(p => p.HasError);
+        var hasTranslationError = paragraphs.Any(p => p.HasError && (store.CurrentSession == 0 || p.SessionId == store.CurrentSession));
         var effectiveState = currentPipelineState;
 
         var tip = statusMessage;
@@ -1142,7 +1144,7 @@ public sealed class MainWindow : Window
     {
         try
         {
-            var p = history.SelectedItem as SubtitleParagraph ?? SubtitleProjection.Compact(store.Snapshot());
+            var p = history.SelectedItem as SubtitleParagraph ?? SubtitleProjection.Compact(store.Snapshot(), store.CurrentSession);
             Clipboard.SetText(p.Source + Environment.NewLine + p.Translation);
         }
         catch { SetStatus("无法写入剪贴板，请重试", PipelineState.Error); }

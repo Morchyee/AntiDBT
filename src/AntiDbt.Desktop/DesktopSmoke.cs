@@ -40,18 +40,24 @@ internal static class DesktopSmoke
             store.ApplyTranslation(generation, "1", 1, "实时字幕立即显示原文。");
             await Task.Delay(100);
             Check("translation visible", window.TestTarget.Contains("立即显示"));
-            store.ApplySource(generation, new("1", 2, "Live subtitles revise the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
+            store.ApplySource(generation, new("1", 2, "Live subtitles show the original immediately and clearly.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
             await Task.Delay(100);
-            Check("revision replaces source and retains draft without placeholder", window.TestSource.Contains("revise") && window.TestTarget.Contains("立即显示") && !window.TestTarget.Contains("待更新"));
-            store.ApplyTranslation(generation, "1", 2, "实时字幕立即修正原文。");
+            Check("prefix extension replaces source and retains draft without placeholder", window.TestSource.Contains("clearly") && window.TestTarget.Contains("立即显示") && !window.TestTarget.Contains("待更新"));
+            store.ApplyTranslation(generation, "1", 2, "实时字幕立即且清晰显示原文。");
             await Task.Delay(100);
+
+            // Verify incompatible semantic revision clears provisional draft
+            store.ApplySource(generation, new("1", 3, "Live subtitles do not show the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
+            await Task.Delay(100);
+            Check("incompatible revision clears provisional draft", window.TestTarget == "" || !window.TestTarget.Contains("立即"));
+
             Capture(window, Path.Combine(directory, "desktop-compact.png"));
-            store.ApplySource(generation, new("1", 3, string.Join(" ", Enumerable.Repeat("Latest words remain visible in a long sentence", 12)) + ".", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
+            store.ApplySource(generation, new("1", 4, string.Join(" ", Enumerable.Repeat("Latest words remain visible in a long sentence", 12)) + ".", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
             await Task.Delay(150);
             Check("compact long sentence follows its last two lines", window.TestCompactOffset > 0);
             Capture(window, Path.Combine(directory, "desktop-compact-long.png"));
-            store.ApplySource(generation, new("1", 4, "Live subtitles revise the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
-            store.ApplyTranslation(generation, "1", 4, "实时字幕立即修正原文。");
+            store.ApplySource(generation, new("1", 5, "Live subtitles show the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
+            store.ApplyTranslation(generation, "1", 5, "实时字幕立即显示原文。");
             await Task.Delay(100);
 
             // Verify continuous speech merges into single paragraph without forced newline
