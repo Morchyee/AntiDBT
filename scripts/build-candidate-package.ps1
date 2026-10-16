@@ -31,13 +31,20 @@ try {
     }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
 
+    # Detect dotnet executable and target framework
+    $dotnetCmd = if (Test-Path "$taskRoot/.dotnet/dotnet.exe") { "$taskRoot/.dotnet/dotnet.exe" } else { "dotnet" }
+    $tfmWin = "net10.0-windows"
+    if (-not (Test-Path "$taskRoot/src/AntiDbt.Core/bin/Debug/net10.0")) {
+        $tfmWin = "net9.0-windows"
+    }
+
     # 1. Restore
-    Write-Host "`n[1/6] Restoring desktop project dependencies (win-x64)..." -ForegroundColor Yellow
-    & dotnet restore src/AntiDbt.Desktop/AntiDbt.Desktop.csproj -r win-x64 -m:1
+    Write-Host "`n[1/6] Restoring desktop project dependencies (win-x64, using $dotnetCmd)..." -ForegroundColor Yellow
+    & $dotnetCmd restore src/AntiDbt.Desktop/AntiDbt.Desktop.csproj -r win-x64 -m:1
     if ($LASTEXITCODE -ne 0) { throw "Restore failed for win-x64" }
 
     # 2. Publish self-contained executable
-    Write-Host "`n[2/6] Publishing self-contained Release build..." -ForegroundColor Yellow
+    Write-Host "`n[2/6] Publishing self-contained Release build (target: $tfmWin)..." -ForegroundColor Yellow
     $publishArgs = @(
         'publish', 'src/AntiDbt.Desktop/AntiDbt.Desktop.csproj',
         '--no-restore',
@@ -55,7 +62,7 @@ try {
         '-m:1',
         '-o', $destination
     )
-    & dotnet @publishArgs
+    & $dotnetCmd @publishArgs
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
 
     # 3. Copy Notices, Licenses & Documentation
@@ -151,7 +158,7 @@ $(if ($zipHash) { "$zipHash *$(Split-Path $zipPath -Leaf)" })
         Commit = (git rev-parse HEAD)
         Branch = (git branch --show-current)
         BuildTime = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
-        TargetFramework = "net9.0-windows"
+        TargetFramework = $tfmWin
         RuntimeIdentifier = "win-x64"
         ExecutableHash = $exeHash
         NativeSpeechDllHash = $nativeDllHash
