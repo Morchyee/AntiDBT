@@ -667,6 +667,50 @@ await TestAsync("pipeline retry translation enforces session, revision, final, a
     Check(!p.RetryTranslation(session + 99, "seg3", 2), "different session must be rejected");
 });
 
+await TestAsync("production pipeline wires telemetry and records stage metrics during normal execution", async () => {
+    var audio = new TestAudioSource();
+    var asr = new TestAsrProvider();
+    var translator = new CountingTranslator();
+    await using var p = new CaptionPipeline(audio, asr, translator, new() { Translation = new() { DebounceMilliseconds = 0 } });
+    await p.StartAsync();
+
+    audio.Push();
+    for (int i = 0; i < 100 && !p.Store.Snapshot().Any(x => x.TranslationText.Length > 0); i++)
+        await Task.Delay(20);
+
+    var records = p.Telemetry.Snapshot();
+    Check(records.Count > 0, "pipeline telemetry must contain records from production translation flow");
+    var rec = records[0];
+    Check(rec.Outcome == TelemetryOutcome.Success, $"expected Success outcome, got {rec.Outcome}");
+    Check(rec.TotalPipelineMs.HasValue && rec.TotalPipelineMs.Value >= 0, "TotalPipelineMs must be measured");
+    Check(rec.MtServiceMs.HasValue && rec.MtServiceMs.Value >= 0, "MtServiceMs must be measured");
+
+    var summary = p.Telemetry.Summarize();
+    Check(summary.SampleCount > 0, $"expected SampleCount > 0, got {summary.SampleCount}");
+
+    await p.StopAsync();
+});
+
+Test("subtitle store dynamic MaxHistory truncates history and preserves session", () => {
+    var store = new SubtitleStore(100);
+    var session = store.BeginSession();
+    for (int i = 1; i <= 20; i++)
+    {
+        store.ApplySource(session, Speech($"Sentence {i}", 1, $"seg-{i}", final: true, start: i * 1000));
+        store.ApplyTranslation(session, $"seg-{i}", 1, $"译文 {i}");
+    }
+    Check(store.Snapshot().Count == 20, $"expected 20 items, got {store.Snapshot().Count}");
+
+    // Dynamically change MaxHistory to 10
+    store.MaxHistory = 10;
+    Check(store.MaxHistory == 10, "MaxHistory property should reflect updated limit");
+    var snapshot = store.Snapshot();
+    Check(snapshot.Count == 10, $"history should be truncated to 10 items, got {snapshot.Count}");
+    Check(snapshot[0].SegmentId == "seg-11", $"oldest remaining item should be seg-11, got {snapshot[0].SegmentId}");
+    Check(snapshot.Last().SegmentId == "seg-20", $"latest item should be seg-20, got {snapshot.Last().SegmentId}");
+    Check(store.CurrentSession == session, "session isolation must be preserved after MaxHistory change");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

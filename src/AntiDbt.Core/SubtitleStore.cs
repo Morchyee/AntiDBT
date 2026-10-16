@@ -4,17 +4,32 @@ namespace AntiDbt.Core;
 public sealed record CaptionSegment(long SessionId, string SegmentId, int Revision, string SourceText,
     string TranslationText, bool IsFinal, TimeSpan AudioStart, TimeSpan AudioEnd, long ReceivedTimestamp,
     long? TranslatedTimestamp, string Language, string? TranslationError = null,
-    string ProvisionalTranslationText = "", int TranslationRevision = 0);
+    string ProvisionalTranslationText = "", int TranslationRevision = 0,
+    double? AsrLatencyMs = null, double? QueueWaitMs = null);
 
 public sealed class SubtitleStore
 {
     private readonly object _sync = new();
     private readonly List<CaptionSegment> _rows = [];
     private readonly Dictionary<string, int> _deleted = new();
-    private readonly int _maxHistory;
+    private int _maxHistory;
     private long _session;
     public event Action? Changed;
     public SubtitleStore(int maxHistory = 2000) => _maxHistory = Math.Clamp(maxHistory, 1, 10000);
+    public int MaxHistory
+    {
+        get { lock (_sync) return _maxHistory; }
+        set
+        {
+            lock (_sync)
+            {
+                _maxHistory = Math.Clamp(value, 1, 10000);
+                while (_rows.Count > _maxHistory)
+                    _rows.RemoveAt(0);
+            }
+            Changed?.Invoke();
+        }
+    }
     public long CurrentSession
     {
         get

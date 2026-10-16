@@ -424,6 +424,7 @@ public sealed class MainWindow : Window
         {
             var loaded = persistSettings ? await settingsStore.LoadAsync() : new AppSettings();
             settings = LanguageSettings.Upgrade(string.IsNullOrEmpty(loaded.Asr.Provider) ? ProviderCatalog.DefaultSettings() : loaded);
+            store.MaxHistory = settings.MaxHistory > 0 ? settings.MaxHistory : 2000;
             UiText.CurrentLanguage = settings.UiLanguage;
             ApplyTheme();
             ApplyUiLanguage();
@@ -495,6 +496,7 @@ public sealed class MainWindow : Window
 
     internal async Task ApplySettingsResultAsync(AppSettings newSettings)
     {
+        store.MaxHistory = newSettings.MaxHistory > 0 ? newSettings.MaxHistory : 2000;
         var wasRunning = pipeline is not null && !pipeline.Completion.IsCompleted;
         var pipelineChanged = HasPipelineConfigChanged(settings, newSettings);
         if (pipelineChanged)
@@ -551,7 +553,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    static bool HasPipelineConfigChanged(AppSettings a, AppSettings b)
+    internal static bool HasPipelineConfigChanged(AppSettings a, AppSettings b)
     {
         if (a.AudioDeviceId != b.AudioDeviceId) return true;
         if (a.SourceLanguage != b.SourceLanguage) return true;
@@ -569,18 +571,33 @@ public sealed class MainWindow : Window
             !DictionariesEqual(a.Asr.Secrets, b.Asr.Secrets))
             return true;
 
-        if (a.Translation.Provider != b.Translation.Provider ||
-            a.Translation.ApiKey != b.Translation.ApiKey ||
-            a.Translation.Endpoint != b.Translation.Endpoint ||
-            a.Translation.Model != b.Translation.Model ||
-            a.Translation.DebounceMilliseconds != b.Translation.DebounceMilliseconds ||
-            a.Translation.TimeoutSeconds != b.Translation.TimeoutSeconds ||
-            a.Translation.ContextSentences != b.Translation.ContextSentences ||
-            !DictionariesEqual(a.Translation.Options, b.Translation.Options) ||
-            !DictionariesEqual(a.Translation.Secrets, b.Translation.Secrets))
+        if (!TranslationConfigsEqual(a.Translation, b.Translation))
             return true;
 
+        if (b.FallbackEnabled && !string.IsNullOrEmpty(b.FallbackTranslationProviderId))
+        {
+            a.TranslationProfiles.TryGetValue(b.FallbackTranslationProviderId, out var backupA);
+            b.TranslationProfiles.TryGetValue(b.FallbackTranslationProviderId, out var backupB);
+            if (!TranslationConfigsEqual(backupA, backupB))
+                return true;
+        }
+
         return false;
+    }
+
+    static bool TranslationConfigsEqual(TranslationConfiguration? a, TranslationConfiguration? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        return a.Provider == b.Provider &&
+               a.ApiKey == b.ApiKey &&
+               a.Endpoint == b.Endpoint &&
+               a.Model == b.Model &&
+               a.DebounceMilliseconds == b.DebounceMilliseconds &&
+               a.TimeoutSeconds == b.TimeoutSeconds &&
+               a.ContextSentences == b.ContextSentences &&
+               DictionariesEqual(a.Options, b.Options) &&
+               DictionariesEqual(a.Secrets, b.Secrets);
     }
 
     static bool DictionariesEqual(Dictionary<string, string>? x, Dictionary<string, string>? y)
@@ -657,7 +674,7 @@ public sealed class MainWindow : Window
         });
         current.AudioLevelChanged += level =>
         {
-            if (level > 50.0)
+            if (level > 0.005)
                 Interlocked.Exchange(ref lastAudibleTicks, DateTimeOffset.UtcNow.Ticks);
         };
         Interlocked.Exchange(ref lastAudibleTicks, 0);
@@ -1173,7 +1190,17 @@ public sealed class MainWindow : Window
     internal string TestStatusText => statusText.Text;
     internal string TestStatusTip => statusBadge.ToolTip as string ?? "";
     internal string TestStartButtonContent => start.Content as string ?? "";
-    internal void TestOpenSettingsCancel() => ApplyTheme();
+    internal void TestOpenSettingsCancel()
+    {
+        var dialog = new SettingsWindow(settings) { Owner = this };
+        dialog.Close();
+        ApplyTheme();
+    }
+    internal void TestOnAudioLevelChanged(double level)
+    {
+        if (level > 0.005)
+            Interlocked.Exchange(ref lastAudibleTicks, DateTimeOffset.UtcNow.Ticks);
+    }
     internal Task TestApplySettingsResultAsync(AppSettings newSettings) => ApplySettingsResultAsync(newSettings);
     internal void TestSetAudibleTicks(long ticks) => Interlocked.Exchange(ref lastAudibleTicks, ticks);
     internal void TestUpdateStatusDisplay() => UpdateStatusDisplay();

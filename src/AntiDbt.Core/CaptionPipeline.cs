@@ -38,7 +38,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
         _asr = asr;
         _settings = settings;
         Store = store ?? new(settings.MaxHistory);
-        _translations = new(Store, translator, settings.Translation, settings.TargetLanguage);
+        _translations = new(Store, translator, settings.Translation, settings.TargetLanguage, Telemetry);
         _translations.Error += message => Publish(PipelineState.Listening, message);
     }
     public Task StartAsync(CancellationToken token = default)
@@ -106,7 +106,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     var generation = Store.BeginSession(ClearStoreOnStart && first);
                     first = false;
                     Publish(PipelineState.Listening, "正在聆听系统音频");
-                    var anchors = new List<(double End, long Timestamp, long Discontinuities)>();
+                    var anchors = new List<(double End, long CapturedTimestamp, long DequeuedTimestamp, long Discontinuities)>();
                     var timelineLock = new object();
                     double sentSeconds = 0;
                     bool receivedResult = false;
@@ -150,7 +150,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                         sentSeconds += chunk.AudioDuration.TotalSeconds;
                         lock (timelineLock)
                         {
-                            anchors.Add((sentSeconds, chunk.CapturedTimestamp, _queue.Discontinuities));
+                            anchors.Add((sentSeconds, chunk.CapturedTimestamp, Stopwatch.GetTimestamp(), _queue.Discontinuities));
                             if (anchors.Count > 1000)
                                 anchors.RemoveAt(0);
                         }
@@ -284,7 +284,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 Publish(PipelineState.Stopped, "已停止");
         }
     }
-    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp, long Discontinuities)> anchors, object timelineLock, CancellationTokenSource connection, Action? onResult = null)
+    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long CapturedTimestamp, long DequeuedTimestamp, long Discontinuities)> anchors, object timelineLock, CancellationTokenSource connection, Action? onResult = null)
     {
         try
         {
@@ -302,21 +302,34 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     continue;
                 long? audioEnd = null;
                 bool isDiscontinuous = false;
+                double? queueWaitMs = null;
                 lock (timelineLock)
                 {
                     var match = anchors.FirstOrDefault(x => x.End >= result.AudioEnd.TotalSeconds);
-                    if (match.Timestamp != 0)
+                    if (match.CapturedTimestamp != 0)
                     {
-                        audioEnd = match.Timestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
+                        audioEnd = match.CapturedTimestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
+                        if (match.DequeuedTimestamp > match.CapturedTimestamp)
+                        {
+                            queueWaitMs = Stopwatch.GetElapsedTime(match.CapturedTimestamp, match.DequeuedTimestamp).TotalMilliseconds;
+                        }
                         if (anchors.Count > 0 && match.Discontinuities != anchors[0].Discontinuities)
                             isDiscontinuous = true;
                     }
                 }
+                double? asrMs = null;
                 if (audioEnd is { } timestamp && !isDiscontinuous)
                 {
                     var elapsed = Stopwatch.GetElapsedTime(timestamp);
                     if (elapsed >= TimeSpan.Zero)
+                    {
                         AsrLatency.Record(elapsed);
+                        asrMs = elapsed.TotalMilliseconds;
+                    }
+                }
+                if (asrMs.HasValue || queueWaitMs.HasValue)
+                {
+                    segment = segment with { AsrLatencyMs = asrMs, QueueWaitMs = queueWaitMs };
                 }
                 _translations.Schedule(segment);
             }

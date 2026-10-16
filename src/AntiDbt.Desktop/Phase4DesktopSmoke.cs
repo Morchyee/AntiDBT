@@ -572,6 +572,87 @@ internal static class Phase4DesktopSmoke
         settingsJa.TestPage("一般");
         check("SettingsWindow supports Japanese localized navigation", settingsJa.TestNavigationCount == 8);
         settingsJa.Close();
+
+        await VerifyPhase5ReliabilityR5Async(main, check);
+    }
+
+    internal static async Task VerifyPhase5ReliabilityR5Async(MainWindow main, Action<string, bool> check)
+    {
+        // 1. Audio level normalization & TipNoAudioSignal
+        var mockAudio = new FixtureAudio();
+        var mockAsr = new FixtureAsr();
+        var mockMt = new DelayedFixtureTranslator(10, "ok");
+        main.TestPipelineFactory = (s, st) => new CaptionPipeline(mockAudio, mockAsr, mockMt, s, st);
+        await main.TestStartAsync();
+        await Idle(main);
+        check("pipeline listening for audio level test", main.TestRunning);
+
+        // Initial state before audible sound: ticks = 0 => tip has NoAudioSignal
+        main.TestSetAudibleTicks(0);
+        main.TestUpdateStatusDisplay();
+        check("silence reports no audio signal tip", main.TestStatusTip.Contains(UiText.TipNoAudioSignal));
+
+        // Sub-audible level (< 0.005) does not clear warning
+        main.TestOnAudioLevelChanged(0.003);
+        main.TestUpdateStatusDisplay();
+        check("sub-audible level (< 0.005) retains no audio signal tip", main.TestStatusTip.Contains(UiText.TipNoAudioSignal));
+
+        // Audible sound (> 0.005) updates ticks and clears warning
+        main.TestOnAudioLevelChanged(0.015);
+        main.TestUpdateStatusDisplay();
+        check("audible RMS (> 0.005) clears no audio signal tip", !main.TestStatusTip.Contains(UiText.TipNoAudioSignal));
+
+        // 2. Settings dialog open & cancel does not alter running pipeline
+        main.TestOpenSettingsCancel();
+        await Idle(main);
+        check("settings open and cancel preserves running pipeline", main.TestRunning);
+
+        // 3. Fallback translation provider profile modification detection
+        var currentSettings = main.TestSettings with
+        {
+            FallbackEnabled = true,
+            FallbackCostConsent = true,
+            FallbackTranslationProviderId = "DeepL",
+            TranslationProfiles = new()
+            {
+                ["DeepL"] = ProviderDescriptors.DefaultTranslation("DeepL") with { ApiKey = "initial-backup-key" }
+            }
+        };
+        var modifiedBackup = currentSettings with
+        {
+            TranslationProfiles = new()
+            {
+                ["DeepL"] = ProviderDescriptors.DefaultTranslation("DeepL") with { ApiKey = "updated-backup-key" }
+            }
+        };
+        check("HasPipelineConfigChanged detects backup MT credential edit",
+            MainWindow.HasPipelineConfigChanged(currentSettings, modifiedBackup));
+
+        main.TestPipelineFactory = (s, st) => new CaptionPipeline(new FixtureAudio(), new FixtureAsr(), new DelayedFixtureTranslator(10, "ok"), s, st);
+        await main.TestApplySettingsResultAsync(currentSettings);
+        await Idle(main);
+        check("pipeline running with fallback settings", main.TestRunning);
+
+        bool changedDetected = false;
+        main.TestPipelineFactory = (s, st) =>
+        {
+            changedDetected = true;
+            return new CaptionPipeline(new FixtureAudio(), new FixtureAsr(), new DelayedFixtureTranslator(10, "ok"), s, st);
+        };
+        await main.TestApplySettingsResultAsync(modifiedBackup);
+        await Idle(main);
+        check("fallback provider credential edit triggers pipeline reconfiguration while running", changedDetected && main.TestRunning);
+
+        // 4. MaxHistory synchronization from AppSettings
+        var smallHistorySettings = modifiedBackup with { MaxHistory = 5 };
+        await main.TestApplySettingsResultAsync(smallHistorySettings);
+        await Idle(main);
+        check("store MaxHistory synchronizes with applied AppSettings", main.TestStore.MaxHistory == 5);
+
+        // Clean up pipeline
+        await main.TestStopCaptureAsync();
+        await Idle(main);
+        main.TestPipelineFactory = null;
     }
 
     sealed class ControllableFixtureTranslator : ITranslationProvider

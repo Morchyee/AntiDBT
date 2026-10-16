@@ -13,16 +13,18 @@ public sealed class TranslationScheduler : IAsyncDisposable
     readonly List<(Job Job, TaskCompletionSource Ready)> waiting = new();
     int activeSlots;
     readonly Dictionary<(long, string), Job> jobs = new(); readonly HashSet<Task> tasks = new(); readonly Dictionary<string, string> cache = new();
+    readonly PipelineTelemetryCollector? telemetry;
     bool disposed;
     int outstandingRequests;
     public LatencyMonitor RequestLatency { get; } = new();
     public event Action<string>? Error;
-    public TranslationScheduler(SubtitleStore store, ITranslationProvider provider, TranslationConfiguration settings, string target)
+    public TranslationScheduler(SubtitleStore store, ITranslationProvider provider, TranslationConfiguration settings, string target, PipelineTelemetryCollector? telemetry = null)
     {
         this.store = store;
         this.provider = provider;
         this.settings = settings;
         this.target = target;
+        this.telemetry = telemetry;
     }
     public void Schedule(CaptionSegment segment)
     {
@@ -89,7 +91,24 @@ public sealed class TranslationScheduler : IAsyncDisposable
                         string? text;
                         lock (sync)
                             cache.TryGetValue(key, out text);
-                        if (text is null)
+                        if (text is not null)
+                        {
+                            telemetry?.Record(new SegmentTelemetryRecord
+                            {
+                                SessionId = segment.SessionId,
+                                SegmentId = segment.SegmentId,
+                                Revision = segment.Revision,
+                                IsFinal = segment.IsFinal,
+                                Language = segment.Language,
+                                QueueWaitMs = segment.QueueWaitMs,
+                                AsrServiceMs = segment.AsrLatencyMs,
+                                MtDebounceWaitMs = 0,
+                                MtServiceMs = 0,
+                                TotalPipelineMs = segment.ReceivedTimestamp > 0 ? Stopwatch.GetElapsedTime(segment.ReceivedTimestamp).TotalMilliseconds : null,
+                                Outcome = TelemetryOutcome.CacheHit
+                            });
+                        }
+                        else
                         {
                             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
                             deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(settings.TimeoutSeconds, 1, 120)));
@@ -107,7 +126,22 @@ public sealed class TranslationScheduler : IAsyncDisposable
                             catch { Interlocked.Decrement(ref outstandingRequests); throw; }
                             _ = request.ContinueWith(t => { Interlocked.Decrement(ref outstandingRequests); if (t.IsFaulted) _ = t.Exception; }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                             text = await request.WaitAsync(deadline.Token);
-                            RequestLatency.Record(Stopwatch.GetElapsedTime(began));
+                            var serviceMs = Stopwatch.GetElapsedTime(began).TotalMilliseconds;
+                            RequestLatency.Record(TimeSpan.FromMilliseconds(serviceMs));
+                            telemetry?.Record(new SegmentTelemetryRecord
+                            {
+                                SessionId = segment.SessionId,
+                                SegmentId = segment.SegmentId,
+                                Revision = segment.Revision,
+                                IsFinal = segment.IsFinal,
+                                Language = segment.Language,
+                                QueueWaitMs = segment.QueueWaitMs,
+                                AsrServiceMs = segment.AsrLatencyMs,
+                                MtDebounceWaitMs = segment.IsFinal ? 0 : settings.DebounceMilliseconds,
+                                MtServiceMs = serviceMs,
+                                TotalPipelineMs = segment.ReceivedTimestamp > 0 ? Stopwatch.GetElapsedTime(segment.ReceivedTimestamp).TotalMilliseconds : null,
+                                Outcome = TelemetryOutcome.Success
+                            });
                             attempt.Token.ThrowIfCancellationRequested();
                             lock (sync)
                             {
@@ -120,18 +154,67 @@ public sealed class TranslationScheduler : IAsyncDisposable
                         if (!store.ApplyTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text))
                             store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, text);
                     }
-                    catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested) { }
+                    catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested)
+                    {
+                        telemetry?.Record(new SegmentTelemetryRecord
+                        {
+                            SessionId = segment.SessionId,
+                            SegmentId = segment.SegmentId,
+                            Revision = segment.Revision,
+                            IsFinal = segment.IsFinal,
+                            Language = segment.Language,
+                            QueueWaitMs = segment.QueueWaitMs,
+                            AsrServiceMs = segment.AsrLatencyMs,
+                            Outcome = TelemetryOutcome.Cancelled
+                        });
+                    }
                     catch (OperationCanceledException) when (!token.IsCancellationRequested)
                     {
+                        telemetry?.Record(new SegmentTelemetryRecord
+                        {
+                            SessionId = segment.SessionId,
+                            SegmentId = segment.SegmentId,
+                            Revision = segment.Revision,
+                            IsFinal = segment.IsFinal,
+                            Language = segment.Language,
+                            QueueWaitMs = segment.QueueWaitMs,
+                            AsrServiceMs = segment.AsrLatencyMs,
+                            Outcome = TelemetryOutcome.Failed,
+                            ErrorKind = "Timeout"
+                        });
                         if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
                             Error?.Invoke("翻译请求超时，请检查服务或重试");
                     }
                     catch (ProviderException error) when (!token.IsCancellationRequested)
                     {
+                        telemetry?.Record(new SegmentTelemetryRecord
+                        {
+                            SessionId = segment.SessionId,
+                            SegmentId = segment.SegmentId,
+                            Revision = segment.Revision,
+                            IsFinal = segment.IsFinal,
+                            Language = segment.Language,
+                            QueueWaitMs = segment.QueueWaitMs,
+                            AsrServiceMs = segment.AsrLatencyMs,
+                            Outcome = TelemetryOutcome.Failed,
+                            ErrorKind = error.Kind.ToString()
+                        });
                         if(store.ApplyTranslationError(segment.SessionId,segment.SegmentId,segment.Revision,error.Message))Error?.Invoke(error.Message);
                     }
                     catch (Exception) when (!token.IsCancellationRequested)
                     {
+                        telemetry?.Record(new SegmentTelemetryRecord
+                        {
+                            SessionId = segment.SessionId,
+                            SegmentId = segment.SegmentId,
+                            Revision = segment.Revision,
+                            IsFinal = segment.IsFinal,
+                            Language = segment.Language,
+                            QueueWaitMs = segment.QueueWaitMs,
+                            AsrServiceMs = segment.AsrLatencyMs,
+                            Outcome = TelemetryOutcome.Failed,
+                            ErrorKind = "GenericFailure"
+                        });
                         if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译服务调用失败"))
                             Error?.Invoke("翻译服务调用失败，请检查密钥、权限、配额和网络");
                     }
