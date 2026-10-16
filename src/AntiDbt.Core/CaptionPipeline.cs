@@ -107,7 +107,8 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     var anchors = new List<(double End, long Timestamp)>();
                     var timelineLock = new object();
                     double sentSeconds = 0;
-                    reader = ReadResultsAsync(session, generation, anchors, timelineLock, connection);
+                    bool receivedResult = false;
+                    reader = ReadResultsAsync(session, generation, anchors, timelineLock, connection, () => receivedResult = true);
                     long lastSent = Stopwatch.GetTimestamp();
                     while (!token.IsCancellationRequested && (!_captureEnded || _queue.Count > 0))
                     {
@@ -136,7 +137,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                             sendDeadline.CancelAfter(TimeSpan.FromSeconds(5));
                             await session.SendAudioAsync(chunk!.Pcm, sendDeadline.Token);
                         }
-                        if (failures > 0 && Stopwatch.GetElapsedTime(sessionConnectedTimestamp) >= StableHealthyPeriod)
+                        if (failures > 0 && receivedResult && Stopwatch.GetElapsedTime(sessionConnectedTimestamp) >= StableHealthyPeriod)
                         {
                             failures = 0;
                         }
@@ -170,26 +171,66 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     break;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
-                catch(ProviderException error) when(error.Kind is ProviderErrorKind.Configuration or ProviderErrorKind.Authentication or ProviderErrorKind.Quota or ProviderErrorKind.ModelUnavailable or ProviderErrorKind.UnsupportedLanguage){throw;}
-                catch (Exception error) when (!_stopRequested && !_captureEnded && !token.IsCancellationRequested && failures < 10)
+                catch (Exception rawError)
                 {
-                    connection.Cancel();
-                    _translations.CancelPending();
-                    Store.BeginSession(false);
-                    failures++;
-                    Publish(PipelineState.Retrying, $"识别连接中断，正在重试 {failures}/10");
-                    TimeSpan retry;
-                    if (error is ProviderException { Kind: ProviderErrorKind.RateLimited, RetryAfter: { } interval })
+                    Exception effectiveError = rawError;
+                    if (reader is not null)
                     {
-                        retry = interval < TimeSpan.Zero ? TimeSpan.Zero : interval > TimeSpan.FromSeconds(60) ? TimeSpan.FromSeconds(60) : interval;
+                        if (reader.IsFaulted && reader.Exception?.InnerException is not null)
+                        {
+                            effectiveError = reader.Exception.InnerException;
+                        }
+                        else if (!reader.IsCompleted)
+                        {
+                            try
+                            {
+                                await reader.WaitAsync(TimeSpan.FromMilliseconds(200));
+                            }
+                            catch
+                            {
+                                if (reader.IsFaulted && reader.Exception?.InnerException is not null)
+                                    effectiveError = reader.Exception.InnerException;
+                            }
+                        }
+                    }
+
+                    if (effectiveError is ProviderException fatal && fatal.Kind is ProviderErrorKind.Configuration
+                        or ProviderErrorKind.Authentication
+                        or ProviderErrorKind.Quota
+                        or ProviderErrorKind.ModelUnavailable
+                        or ProviderErrorKind.UnsupportedLanguage)
+                    {
+                        throw fatal;
+                    }
+
+                    if (!_stopRequested && !_captureEnded && !token.IsCancellationRequested && failures < 10)
+                    {
+                        connection.Cancel();
+                        _translations.CancelPending();
+                        Store.BeginSession(false);
+                        failures++;
+                        Publish(PipelineState.Retrying, $"识别连接中断，正在重试 {failures}/10");
+                        TimeSpan retry;
+                        if (effectiveError is ProviderException { Kind: ProviderErrorKind.RateLimited, RetryAfter: { } interval })
+                        {
+                            if (interval > TimeSpan.FromMinutes(2))
+                            {
+                                throw new ProviderException(ProviderErrorKind.RateLimited, $"服务限流冷却时间为 {interval.TotalSeconds:F0} 秒，超出自动重试上限，请稍后手动重试。", interval);
+                            }
+                            retry = interval < TimeSpan.Zero ? TimeSpan.Zero : interval;
+                        }
+                        else
+                        {
+                            double factor = Math.Pow(2, Math.Min(failures - 1, 4));
+                            double delayMs = Math.Min(MaxRetryDelay.TotalMilliseconds, InitialRetryDelay.TotalMilliseconds * factor);
+                            retry = TimeSpan.FromMilliseconds(delayMs);
+                        }
+                        await Task.Delay(retry, token);
                     }
                     else
                     {
-                        double factor = Math.Pow(2, Math.Min(failures - 1, 4));
-                        double delayMs = Math.Min(MaxRetryDelay.TotalMilliseconds, InitialRetryDelay.TotalMilliseconds * factor);
-                        retry = TimeSpan.FromMilliseconds(delayMs);
+                        throw effectiveError;
                     }
-                    await Task.Delay(retry, token);
                 }
                 finally
                 {
@@ -208,7 +249,8 @@ public sealed class CaptionPipeline : IAsyncDisposable
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (ProviderException error)
         {
-            failed=true;Publish(PipelineState.Error,$"{error.Kind}: {error.Message}");
+            failed = true;
+            Publish(PipelineState.Error, $"{error.Kind}: {error.Message}");
         }
         catch (Exception)
         {
@@ -237,12 +279,13 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 Publish(PipelineState.Stopped, "已停止");
         }
     }
-    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp)> anchors, object timelineLock, CancellationTokenSource connection)
+    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp)> anchors, object timelineLock, CancellationTokenSource connection, Action? onResult = null)
     {
         try
         {
             await foreach (var result in session.GetResultsAsync(connection.Token))
             {
+                onResult?.Invoke();
                 if (result.IsDeleted)
                 {
                     Store.ApplySource(generation, result);

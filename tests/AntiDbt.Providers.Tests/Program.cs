@@ -25,6 +25,7 @@ app.MapPost("/slow", async context => { try { await Task.Delay(10000,context.Req
 byte[] Response(string text, int flags=1, bool gzip=false) { var payload=Encoding.UTF8.GetBytes(text); if(gzip) { using var output=new MemoryStream(); using(var zip=new GZipStream(output,CompressionMode.Compress,true)) zip.Write(payload); payload=output.ToArray(); } int offset=(flags&1)!=0?8:4; var frame=new byte[offset+4+payload.Length]; frame[0]=0x11; frame[1]=(byte)(0x90|flags); frame[2]=(byte)(gzip?0x11:0x10); if(offset==8) BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(4),flags==3?-1:1); BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(offset),payload.Length); payload.CopyTo(frame,offset+4); return frame; }
 async Task<byte[]> Receive(WebSocket ws) { var buffer=new byte[8192]; using var output=new MemoryStream(); WebSocketReceiveResult r; do { r=await ws.ReceiveAsync(buffer,CancellationToken.None); output.Write(buffer,0,r.Count); } while(!r.EndOfMessage); return output.ToArray(); }
 app.Map("/asr", async context => { wsAuth=context.Request.Headers["X-Api-Key"]=="dummy-key" && context.Request.Headers["X-Api-Resource-Id"]=="volc.seedasr.sauc.duration"; using var ws=await context.WebSockets.AcceptWebSocketAsync(); frames.Clear(); frames.Add(await Receive(ws)); frames.Add(await Receive(ws)); frames.Add(await Receive(ws)); foreach(var (text,final) in new[] {("hello",false),("hello",false),("hello world",false),("hello world",true)}) { var data=Response(JsonSerializer.Serialize(new { result=new {utterances=new[]{new {start_time=0,end_time=200,text,definite=final}}}}),final?3:1,true); await ws.SendAsync(data.AsMemory(0,3),WebSocketMessageType.Binary,false,CancellationToken.None); await ws.SendAsync(data.AsMemory(3),WebSocketMessageType.Binary,true,CancellationToken.None); } await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure,"",CancellationToken.None); });
+byte[] VolcError(int code, string message) { var msgBytes = Encoding.UTF8.GetBytes(message); var packet = new byte[12 + msgBytes.Length]; packet[0] = 0x11; packet[1] = 0xf0; packet[2] = 0x10; packet[3] = 0; BinaryPrimitives.WriteInt32BigEndian(packet.AsSpan(4), code); BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(8), (uint)msgBytes.Length); msgBytes.CopyTo(packet, 12); return packet; }
 var malformed = new Dictionary<string, byte[]> {
  ["truncated"]=[0x11,0x91,0x10,0,0,0,0,1],
  ["flags"]=[0x11,0x94,0x10,0,0,0,0,0],
@@ -33,7 +34,8 @@ var malformed = new Dictionary<string, byte[]> {
  ["bomb"]=Response(new string('x',4*1024*1024+1),0,true),
  ["business"]=Response("{\"code\":45000001,\"message\":\"SECRET_SERVER_BODY\"}"),
  ["protocol"]=[0x11,0xf0,0x10,0,0,0,0,1,0,0,0,0],
- ["auth-type15"]=[0x11,0xf0,0x10,0,0,0,0,4,0,0,0x03,0xe8]
+ ["auth-type15"]=VolcError(45000002, "{\"message\":\"authentication failed\"}"),
+ ["config-type15"]=VolcError(45000001, "{\"message\":\"invalid parameters\"}")
 };
 foreach(var item in malformed) { var captured=item.Value; app.Map("/"+item.Key,async context=> { using var ws=await context.WebSockets.AcceptWebSocketAsync(); await Receive(ws); await ws.SendAsync(captured,WebSocketMessageType.Binary,true,CancellationToken.None); }); }
 app.Map("/hang",async context=> { using var ws=await context.WebSockets.AcceptWebSocketAsync(); await Receive(ws); try { await Task.Delay(10000,context.RequestAborted); } catch(OperationCanceledException) {} });
@@ -55,6 +57,21 @@ await Check("endpoint and missing credential validation",async()=> { foreach(var
 await Check("MT rate limit extracts Retry-After",async()=>{try{await new VolcengineMachineTranslationProvider(Mt("/rate-limit")).TranslateAsync(request,CancellationToken.None);throw new Exception("rate limit expected");}catch(ProviderException e){Assert(e.Kind==ProviderErrorKind.RateLimited&&e.RetryAfter>=TimeSpan.FromSeconds(1)&&!e.ToString().Contains("SECRET_SERVER_BODY"),"rate limit classification");}});
 await Check("MT rejects blank translation",async()=>{try{await new VolcengineMachineTranslationProvider(Mt("/empty-mt")).TranslateAsync(request,CancellationToken.None);throw new Exception("blank translation rejection expected");}catch(ProviderException e){Assert(e.Kind==ProviderErrorKind.InvalidResponse,"blank translation classification");}});
 await Check("ASR maps auth type 15 error",async()=>{await using var session=new VolcengineAsrProvider().CreateSession(Asr("/auth-type15"));using var limit=new CancellationTokenSource(3000);await session.ConnectAsync(limit.Token);try{await foreach(var r in session.GetResultsAsync(limit.Token)){}throw new Exception("auth error expected");}catch(ProviderException e){Assert(e.Kind==ProviderErrorKind.Authentication,"auth classification");}});
+await Check("ASR maps config type 15 error",async()=>{await using var session=new VolcengineAsrProvider().CreateSession(Asr("/config-type15"));using var limit=new CancellationTokenSource(3000);await session.ConnectAsync(limit.Token);try{await foreach(var r in session.GetResultsAsync(limit.Token)){}throw new Exception("config error expected");}catch(ProviderException e){Assert(e.Kind==ProviderErrorKind.Configuration,"config classification");}});
+await Check("ASR official type 15 layout decodes error code and classifies Configuration", async () => {
+    var errorText = Encoding.UTF8.GetBytes("{\"message\":\"invalid parameters\"}");
+    var packet = new byte[12 + errorText.Length]; packet[0] = 0x11; packet[1] = 0xf0; packet[2] = 0x10; packet[3] = 0;
+    BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(4), 45000001);
+    BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(8), (uint)errorText.Length);
+    errorText.CopyTo(packet, 12);
+    var sessionType = typeof(VolcengineAsrProvider).GetNestedTypes(System.Reflection.BindingFlags.NonPublic).Single(t => t.GetMethod("Decode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static) is not null);
+    try {
+        sessionType.GetMethod("Decode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [packet]);
+        throw new Exception("Decode should have thrown ProviderException");
+    } catch (System.Reflection.TargetInvocationException ex) {
+        Assert(ex.InnerException is ProviderException pe && pe.Kind == ProviderErrorKind.Configuration, "official error packet classifies Configuration");
+    }
+});
 await ReviewCases.Run(address, Check);
 await app.StopAsync(); await app.DisposeAsync();
 var artifact=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../../artifacts/provider-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact,JsonSerializer.Serialize(new {scope="localhost HTTP and WebSocket only; no cloud calls",redEvidence="tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); review-red.json records six review regressions; language-red.json records official language aliases; suffix-red.json records unchanged provisional prefix; initial red.log is build-only",tests=outcomes},new JsonSerializerOptions{WriteIndented=true}));

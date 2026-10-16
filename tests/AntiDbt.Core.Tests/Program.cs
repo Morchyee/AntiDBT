@@ -562,6 +562,22 @@ await TestAsync("uncooperative ASR connect times out StopAsync and prevents fals
     Check(asr.Disposals == 1, $"ASR session must be disposed exactly once, got {asr.Disposals}");
 });
 
+await TestAsync("permanent reader error is preserved and not replaced by concurrent send cancellation", async () => {
+    var audio = new TestAudioSource();
+    var asr = new FatalReadAsr();
+    await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
+    p.InitialRetryDelay = TimeSpan.FromMilliseconds(1);
+    p.MaxRetryDelay = TimeSpan.FromMilliseconds(1);
+    var statuses = new List<string>();
+    p.StatusChanged += x => statuses.Add(x.State.ToString());
+    await p.StartAsync();
+    audio.Push();
+    await p.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(asr.Created == 1, $"expected exactly 1 session created, got {asr.Created}");
+    Check(!statuses.Contains("Retrying"), "permanent authentication error must not trigger retry");
+    Check(statuses.LastOrDefault() == "Error", $"last state should be Error, got {statuses.LastOrDefault()}");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

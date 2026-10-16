@@ -142,3 +142,26 @@ sealed class UncooperativeConnectAsr : IAsrProvider, IAsrSession
     public ValueTask DisposeAsync() { Interlocked.Increment(ref Disposals); return ValueTask.CompletedTask; }
 }
 
+sealed class FatalReadAsr : IAsrProvider
+{
+    public int Created;
+    public IAsrSession CreateSession(AsrConfiguration config) { Created++; return new Session(); }
+    sealed class Session : IAsrSession
+    {
+        readonly TaskCompletionSource sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ConnectAsync(CancellationToken token) => Task.CompletedTask;
+        public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) { sent.TrySetResult(); await Task.Delay(1000, token); }
+        public async IAsyncEnumerable<AsrResult> GetResultsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await sent.Task.WaitAsync(token);
+            await Task.Delay(10, token);
+            throw new ProviderException(ProviderErrorKind.Authentication, "synthetic permanent authentication failure");
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+        public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}
+

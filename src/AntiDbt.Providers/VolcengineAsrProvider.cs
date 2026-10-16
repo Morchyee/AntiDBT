@@ -41,15 +41,31 @@ public sealed class VolcengineAsrProvider : IAsrProvider
         {
             var kind = code switch
             {
-                1000 or 1001 or 1002 or 1003 => ProviderErrorKind.Authentication,
+                // Volcengine Big Model Streaming ASR (Seed-ASR/SAUC) official protocol error codes:
+                // 45000001: invalid client request parameters
+                // 45000151: unsupported business cluster or model
                 1004 or 45000001 or 45000151 => ProviderErrorKind.Configuration,
-                1005 => ProviderErrorKind.RateLimited,
+
+                // 45000002: authentication failed (invalid token, appId, etc.)
+                // 1001/1002/1003: legacy auth error codes
+                1001 or 1002 or 1003 or 45000002 => ProviderErrorKind.Authentication,
+
+                // 45000003: quota exhausted or account balance depleted
+                45000003 => ProviderErrorKind.Quota,
+
+                // 45000004/45000005/1005: rate limited / concurrency / QPS quota reached
+                1005 or 45000004 or 45000005 => ProviderErrorKind.RateLimited,
+
+                // 45000081: server recognition timeout
                 45000081 => ProviderErrorKind.Timeout,
+
+                // Standard HTTP status codes
                 _ when code is 401 or 403 => ProviderErrorKind.Authentication,
                 _ when code is 400 => ProviderErrorKind.Configuration,
                 _ when code is 404 => ProviderErrorKind.ModelUnavailable,
                 _ when code is 429 => ProviderErrorKind.RateLimited,
                 _ when code is 402 or 456 => ProviderErrorKind.Quota,
+                _ when code is 408 or 504 => ProviderErrorKind.Timeout,
                 _ => ProviderErrorKind.Service
             };
             return ProviderHttp.Failure(kind);
@@ -163,14 +179,30 @@ public sealed class VolcengineAsrProvider : IAsrProvider
         private static InvalidOperationException InvalidPacket() => new("语音服务响应格式无效。");
         private static (byte[], bool) Decode(byte[] packet)
         {
-            if (packet.Length < 8 || packet[0] >> 4 != 1 || (packet[0] & 15) == 0 || packet[3] != 0)
+            if (packet.Length < 4 || packet[0] >> 4 != 1 || (packet[0] & 15) == 0 || packet[3] != 0)
                 throw InvalidPacket();
             int type = packet[1] >> 4, flags = packet[1] & 15, serialization = packet[2] >> 4, compression = packet[2] & 15;
             if (flags > 3 || compression > 1 || type is not (9 or 15) || serialization != 1)
                 throw InvalidPacket();
             int offset = (packet[0] & 15) * 4;
-            if (offset > packet.Length - 4)
+            if (offset > packet.Length)
                 throw InvalidPacket();
+
+            if (type == 15)
+            {
+                // Official Volcengine Server Error Response (message_type == 15) layout:
+                // Header (offset bytes) + error_code (4 bytes BE) + error_message_size (4 bytes BE) + error_message (error_message_size bytes)
+                if (packet.Length < offset + 8)
+                    throw InvalidPacket();
+                int errorCode = BinaryPrimitives.ReadInt32BigEndian(packet.AsSpan(offset, 4));
+                offset += 4;
+                uint msgSize = BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(offset, 4));
+                offset += 4;
+                if (msgSize > Limit || packet.Length - offset != (int)msgSize)
+                    throw InvalidPacket();
+                throw ClassifyAsrError(errorCode);
+            }
+
             if ((flags & 1) != 0)
             {
                 if (packet.Length < offset + 4)
@@ -180,7 +212,6 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                     throw InvalidPacket();
                 offset += 4;
             }
-
 
             if (packet.Length < offset + 4)
                 throw InvalidPacket();
@@ -206,25 +237,6 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                     payload = output.ToArray();
                 }
                 catch (InvalidDataException) { throw InvalidPacket(); }
-            }
-            if (type == 15)
-            {
-                int errorCode = 0;
-                if (payload.Length >= 4)
-                {
-                    errorCode = BinaryPrimitives.ReadInt32BigEndian(payload);
-                }
-                if (errorCode == 0 && payload.Length > 0)
-                {
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(payload);
-                        if (doc.RootElement.TryGetProperty("code", out var c) && c.TryGetInt32(out var parsedCode))
-                            errorCode = parsedCode;
-                    }
-                    catch { }
-                }
-                throw ClassifyAsrError(errorCode);
             }
             return (payload, (flags & 2) != 0);
         }
