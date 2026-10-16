@@ -92,6 +92,191 @@ await Check("Groq Whisper dropped jobs accurately counted under backpressure", a
 });
 await ReviewCases.Run(address, Check);
 await app.StopAsync(); await app.DisposeAsync();
+await Check("SherpaOnnx rejects nonexistent model directory", async () => {
+    var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = Path.Combine(Path.GetTempPath(), "nonexistent_sherpa_" + Guid.NewGuid().ToString("N")) };
+    var provider = new SherpaOnnxStreamingAsrProvider();
+    await using var session = provider.CreateSession(config);
+    try {
+        await session.ConnectAsync(CancellationToken.None);
+        throw new Exception("Expected ModelUnavailable exception");
+    } catch (ProviderException pe) {
+        Assert(pe.Kind == ProviderErrorKind.ModelUnavailable, "expected ModelUnavailable, got " + pe.Kind);
+        Assert(pe.Message.Contains("不存在"), "expected friendly error message");
+    }
+});
+
+await Check("SherpaOnnx rejects missing tokens file", async () => {
+    var tempDir = Path.Combine(Path.GetTempPath(), "test_tokens_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(tempDir);
+    try {
+        File.WriteAllText(Path.Combine(tempDir, "encoder.onnx"), "dummy");
+        File.WriteAllText(Path.Combine(tempDir, "decoder.onnx"), "dummy");
+        File.WriteAllText(Path.Combine(tempDir, "joiner.onnx"), "dummy");
+        var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = tempDir };
+        var provider = new SherpaOnnxStreamingAsrProvider();
+        await using var session = provider.CreateSession(config);
+        try {
+            await session.ConnectAsync(CancellationToken.None);
+            throw new Exception("Expected ModelUnavailable exception for missing tokens");
+        } catch (ProviderException pe) {
+            Assert(pe.Kind == ProviderErrorKind.ModelUnavailable, "expected ModelUnavailable, got " + pe.Kind);
+            Assert(pe.Message.Contains("tokens.txt"), "message should specify missing tokens.txt");
+        }
+    } finally {
+        try { Directory.Delete(tempDir, true); } catch { }
+    }
+});
+
+await Check("SherpaOnnx rejects missing onnx weights", async () => {
+    var tempDir = Path.Combine(Path.GetTempPath(), "test_weights_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(tempDir);
+    try {
+        File.WriteAllText(Path.Combine(tempDir, "tokens.txt"), "dummy");
+        var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = tempDir };
+        var provider = new SherpaOnnxStreamingAsrProvider();
+        await using var session = provider.CreateSession(config);
+        try {
+            await session.ConnectAsync(CancellationToken.None);
+            throw new Exception("Expected ModelUnavailable exception for missing weights");
+        } catch (ProviderException pe) {
+            Assert(pe.Kind == ProviderErrorKind.ModelUnavailable, "expected ModelUnavailable, got " + pe.Kind);
+            Assert(pe.Message.Contains("关键模型文件"), "message should specify missing model files");
+        }
+    } finally {
+        try { Directory.Delete(tempDir, true); } catch { }
+    }
+});
+
+await Check("SherpaOnnx real model streams real audio with partial and final results", async () => {
+    var modelDir = Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17");
+    var wavPath = Path.Combine(modelDir, "test_wavs", "0.wav");
+    if (!File.Exists(wavPath) || !File.Exists(Path.Combine(modelDir, "tokens.txt")))
+        return;
+
+    var config = new AsrConfiguration {
+        Provider = "SherpaOnnx",
+        Model = modelDir,
+        Language = "en",
+        Options = new() { ["numThreads"] = "2" }
+    };
+    var provider = new SherpaOnnxStreamingAsrProvider();
+    await using var session = provider.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    await session.ConnectAsync(limit.Token);
+
+    var wavBytes = await File.ReadAllBytesAsync(wavPath, limit.Token);
+    var pcmBytes = wavBytes[44..]; // skip 44-byte wav header
+
+    var results = new List<AsrResult>();
+    var readerTask = Task.Run(async () => {
+        await foreach (var r in session.GetResultsAsync(limit.Token)) {
+            results.Add(r);
+        }
+    });
+
+    int chunkSize = 6400; // 200ms at 16kHz 16-bit mono
+    int offset = 0;
+    while (offset < pcmBytes.Length) {
+        int length = Math.Min(chunkSize, pcmBytes.Length - offset);
+        await session.SendAudioAsync(pcmBytes.AsMemory(offset, length), limit.Token);
+        offset += length;
+        await Task.Delay(20, limit.Token);
+    }
+    await session.CompleteAsync(limit.Token);
+    await readerTask;
+
+    Assert(results.Count > 0, "expected at least 1 ASR result");
+    bool hasPartial = results.Any(r => !r.IsFinal);
+    bool hasFinal = results.Any(r => r.IsFinal);
+    Assert(hasPartial, "expected real partial recognition results during streaming");
+    Assert(hasFinal, "expected final recognition result after completion");
+    var finalText = results.Last(r => r.IsFinal).Text;
+    Assert(!string.IsNullOrWhiteSpace(finalText), "final recognized text must not be empty");
+    Console.WriteLine($"[SHERPA_ONNX_VERIFIED] Recognized: \"{finalText}\" (Total Events: {results.Count}, Partials: {results.Count(r => !r.IsFinal)})");
+});
+
+await Check("HybridStreamingAsr correlates local partials and cloud final to exact same segment", async () => {
+    var scripted = new[] {
+        new AsrResult("raw-1", 1, "hello", false, TimeSpan.Zero, TimeSpan.FromSeconds(0.5)),
+        new AsrResult("raw-1", 2, "hello world", false, TimeSpan.Zero, TimeSpan.FromSeconds(1.0)),
+        new AsrResult("raw-1", 3, "hello world", true, TimeSpan.Zero, TimeSpan.FromSeconds(1.2))
+    };
+    var mockLocal = new MockScriptedAsrProvider(scripted);
+    var hybrid = new HybridStreamingAsrProvider(
+        localProvider: mockLocal,
+        cloudTranscriber: (pcm, cfg, tok) => Task.FromResult<string?>("Hello, world!"));
+
+    var config = new AsrConfiguration { Provider = "HybridStreamingAsr", Language = "en" };
+    await using var session = hybrid.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await session.ConnectAsync(limit.Token);
+    await session.SendAudioAsync(new byte[3200], limit.Token);
+    await session.CompleteAsync(limit.Token);
+
+    var results = new List<AsrResult>();
+    await foreach (var r in session.GetResultsAsync(limit.Token))
+        results.Add(r);
+
+    Assert(results.Count == 3, $"expected 3 results but got {results.Count}");
+    Assert(results.All(r => r.SegmentId == "hybrid-1"), "all results must share the exact same SegmentId hybrid-1");
+    Assert(results.Select(r => r.Revision).SequenceEqual(new[] { 1, 2, 3 }), "revisions must increment monotonically");
+    Assert(!results[0].IsFinal && results[0].Text == "hello", "first result is partial hello");
+    Assert(!results[1].IsFinal && results[1].Text == "hello world", "second result is partial hello world");
+    Assert(results[2].IsFinal && results[2].Text == "Hello, world!", "final result is cloud replaced high-accuracy final");
+});
+
+await Check("HybridStreamingAsr falls back to local text when cloud fails", async () => {
+    var scripted = new[] {
+        new AsrResult("raw-1", 1, "test local", false, TimeSpan.Zero, TimeSpan.FromSeconds(0.5)),
+        new AsrResult("raw-1", 2, "test local speech", true, TimeSpan.Zero, TimeSpan.FromSeconds(1.0))
+    };
+    var mockLocal = new MockScriptedAsrProvider(scripted);
+    var hybrid = new HybridStreamingAsrProvider(
+        localProvider: mockLocal,
+        cloudTranscriber: (pcm, cfg, tok) => throw new HttpRequestException("simulated cloud network failure"));
+
+    var config = new AsrConfiguration { Provider = "HybridStreamingAsr", Language = "en" };
+    await using var session = hybrid.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await session.ConnectAsync(limit.Token);
+    await session.SendAudioAsync(new byte[3200], limit.Token);
+    await session.CompleteAsync(limit.Token);
+
+    var results = new List<AsrResult>();
+    await foreach (var r in session.GetResultsAsync(limit.Token))
+        results.Add(r);
+
+    Assert(results.Count == 2, $"expected 2 results but got {results.Count}");
+    Assert(results.All(r => r.SegmentId == "hybrid-1"), "all results must share SegmentId hybrid-1");
+    Assert(results[1].IsFinal && results[1].Text == "test local speech", "final result must gracefully fall back to local text");
+});
+
+await Check("HybridStreamingAsr transitions to next segment without crosstalk", async () => {
+    var scripted = new[] {
+        new AsrResult("raw-1", 1, "first sentence", true, TimeSpan.Zero, TimeSpan.FromSeconds(1.0)),
+        new AsrResult("raw-2", 1, "second sentence", true, TimeSpan.FromSeconds(1.0), TimeSpan.FromSeconds(2.0))
+    };
+    var mockLocal = new MockScriptedAsrProvider(scripted);
+    var hybrid = new HybridStreamingAsrProvider(
+        localProvider: mockLocal,
+        cloudTranscriber: (pcm, cfg, tok) => Task.FromResult<string?>(null));
+
+    var config = new AsrConfiguration { Provider = "HybridStreamingAsr", Language = "en" };
+    await using var session = hybrid.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await session.ConnectAsync(limit.Token);
+    await session.SendAudioAsync(new byte[3200], limit.Token);
+    await session.CompleteAsync(limit.Token);
+
+    var results = new List<AsrResult>();
+    await foreach (var r in session.GetResultsAsync(limit.Token))
+        results.Add(r);
+
+    Assert(results.Count == 2, $"expected 2 results but got {results.Count}");
+    Assert(results[0].SegmentId == "hybrid-1" && results[0].Text == "first sentence", "first segment is hybrid-1");
+    Assert(results[1].SegmentId == "hybrid-2" && results[1].Text == "second sentence", "second segment is hybrid-2");
+});
+
 var artifact=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../../artifacts/provider-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact,JsonSerializer.Serialize(new {scope="localhost HTTP and WebSocket only; no cloud calls",redEvidence="tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); review-red.json records six review regressions; language-red.json records official language aliases; suffix-red.json records unchanged provisional prefix; initial red.log is build-only",tests=outcomes},new JsonSerializerOptions{WriteIndented=true}));
 if(outcomes.Any(o=>o.GetType().GetProperty("passed")!.GetValue(o) is false)) Environment.ExitCode=1;
 
@@ -105,6 +290,31 @@ sealed class TestBlockedHttpHandler : HttpMessageHandler
         throw new InvalidOperationException();
     }
 }
+
+sealed class MockScriptedAsrProvider(IEnumerable<AsrResult> scriptedResults) : IAsrProvider
+{
+    public IAsrSession CreateSession(AsrConfiguration configuration) => new MockScriptedAsrSession(scriptedResults);
+}
+
+sealed class MockScriptedAsrSession(IEnumerable<AsrResult> scriptedResults) : IAsrSession
+{
+    readonly System.Threading.Channels.Channel<AsrResult> _channel = System.Threading.Channels.Channel.CreateUnbounded<AsrResult>();
+    public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task CompleteAsync(CancellationToken cancellationToken)
+    {
+        foreach (var r in scriptedResults)
+            await _channel.Writer.WriteAsync(r, cancellationToken);
+        _channel.Writer.TryComplete();
+    }
+    public IAsyncEnumerable<AsrResult> GetResultsAsync(CancellationToken cancellationToken) => _channel.Reader.ReadAllAsync(cancellationToken);
+    public ValueTask DisposeAsync()
+    {
+        _channel.Writer.TryComplete();
+        return ValueTask.CompletedTask;
+    }
+}
+
 
 
 
