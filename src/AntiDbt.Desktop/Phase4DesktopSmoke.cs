@@ -105,6 +105,7 @@ internal static class Phase4DesktopSmoke
         finally { dialog.Close(); }
         await VerifyPhase5ReliabilityA1Async(main, check);
         await VerifyPhase5ReliabilityA2Async(main, check);
+        await VerifyPhase5ReliabilityA5Async(main, check);
         main.TestPipelineFactory = null;
     }
     static async Task WheelAsync(Action<string, bool> check)
@@ -375,6 +376,141 @@ internal static class Phase4DesktopSmoke
 
         check("retry clears error and displays successful translation in desktop UI",
             retriedParagraph != null && !retriedParagraph.HasError && retriedParagraph.Translation.Contains("重试成功的完美译文"));
+
+        await main.TestStopCaptureAsync();
+        await Idle(main);
+        main.TestPipelineFactory = null;
+    }
+
+    internal static async Task VerifyPhase5ReliabilityA5Async(MainWindow main, Action<string, bool> check)
+    {
+        // 1. Endpoint security policy validation
+        // 1.1 Remote service with public HTTPS/WSS
+        bool v1 = false;
+        try { SettingsWindow.TestValidateEndpoint("DeepL", "https://api-free.deepl.com/v2/translate", new()); v1 = true; } catch { }
+        check("A5: public https allowed for remote MT", v1);
+
+        bool v2 = false;
+        try { SettingsWindow.TestValidateEndpoint("VolcengineAsr2", "wss://openspeech.bytedance.com/api/v2/asr", new()); v2 = true; } catch { }
+        check("A5: public wss allowed for VolcengineAsr2", v2);
+
+        // 1.2 Mismatched scheme rejected
+        bool v3 = false;
+        try { SettingsWindow.TestValidateEndpoint("VolcengineAsr2", "https://openspeech.bytedance.com/api/v2/asr", new()); } catch (ArgumentException) { v3 = true; }
+        check("A5: https rejected for VolcengineAsr2 (demands wss)", v3);
+
+        // 1.3 UserInfo / Query / Fragment rejected
+        bool v4 = false;
+        try { SettingsWindow.TestValidateEndpoint("DeepL", "https://user:pass@api.deepl.com/v2", new()); } catch (ArgumentException) { v4 = true; }
+        check("A5: userinfo in endpoint rejected", v4);
+
+        bool v5 = false;
+        try { SettingsWindow.TestValidateEndpoint("DeepL", "https://api.deepl.com/v2?key=1", new()); } catch (ArgumentException) { v5 = true; }
+        check("A5: query in endpoint rejected", v5);
+
+        // 1.4 Loopback rejection for remote providers
+        bool v6 = false;
+        try { SettingsWindow.TestValidateEndpoint("DeepL", "http://127.0.0.1:8000/v1", new()); } catch (ArgumentException) { v6 = true; }
+        check("A5: loopback http rejected for non-OpenAiCompatible provider", v6);
+
+        // 1.5 OpenAiCompatible loopback without allowLocalHttp rejected
+        bool v7 = false;
+        try { SettingsWindow.TestValidateEndpoint("OpenAiCompatible", "http://localhost:11434/v1", new() { ["allowLocalHttp"] = "false" }); } catch (ArgumentException) { v7 = true; }
+        check("A5: loopback http rejected when allowLocalHttp is false", v7);
+
+        // 1.6 OpenAiCompatible loopback WITH allowLocalHttp allowed
+        bool v8 = false;
+        try { SettingsWindow.TestValidateEndpoint("OpenAiCompatible", "http://127.0.0.1:11434/v1", new() { ["allowLocalHttp"] = "true" }); v8 = true; } catch { }
+        check("A5: loopback http allowed for OpenAiCompatible with allowLocalHttp", v8);
+
+        // 1.7 Non-loopback HTTP with allowLocalHttp rejected
+        bool v9 = false;
+        try { SettingsWindow.TestValidateEndpoint("OpenAiCompatible", "http://192.168.1.50:11434/v1", new() { ["allowLocalHttp"] = "true" }); } catch (ArgumentException) { v9 = true; }
+        check("A5: non-loopback http rejected even with allowLocalHttp", v9);
+
+        // 2. Non-intrusive Settings: Cancel / Cosmetic save preserves running capture and history
+        FixtureAsr currentAsr = new();
+        ControllableFixtureTranslator currentTranslator = new();
+        main.TestPipelineFactory = (settings, store) =>
+        {
+            currentAsr = new FixtureAsr();
+            currentTranslator = new ControllableFixtureTranslator();
+            return new CaptionPipeline(new FixtureAudio(), currentAsr, currentTranslator, settings, store);
+        };
+
+        await main.TestStartAsync();
+        await Idle(main);
+        check("A5: pipeline running before settings test", main.TestRunning);
+
+        currentAsr.Emit("p1", "Persistent sentence before settings.", "en", startMs: 0, durationMs: 1000);
+        await currentTranslator.WaitForCountAsync(1);
+        currentTranslator.Complete(0, "设置前持久字幕。");
+        await Idle(main);
+        var initialCount = main.TestVisibleParagraphs.Count;
+        check("A5: subtitles visible before settings interaction", initialCount > 0);
+
+        // 2.1 Cancel settings does not stop pipeline or wipe history
+        main.TestOpenSettingsCancel();
+        await Idle(main);
+        check("A5: cancel settings preserves running pipeline", main.TestRunning);
+        check("A5: cancel settings preserves subtitle history", main.TestVisibleParagraphs.Count == initialCount);
+
+        // 2.2 Cosmetic settings save (Theme, Opacity, Topmost) does not restart pipeline or wipe history
+        var cosmeticSettings = main.TestSettings with { BackgroundOpacity = 0.50, Topmost = false, Theme = "Dark" };
+        await main.TestApplySettingsResultAsync(cosmeticSettings);
+        await Idle(main);
+        check("A5: cosmetic settings save preserves running pipeline without restart", main.TestRunning);
+        check("A5: cosmetic settings save preserves subtitle history", main.TestVisibleParagraphs.Count == initialCount);
+        check("A5: cosmetic settings applied", Math.Abs(main.TestSettings.BackgroundOpacity - 0.50) < 0.01 && !main.Topmost);
+
+        // 2.3 Pipeline configuration change (e.g. Asr Provider) restarts pipeline cleanly with StopReason.Reconfigure
+        var reconfiguredSettings = LanguageSettings.Select(main.TestSettings with { Asr = ProviderDescriptors.DefaultAsr("VolcengineAsr2") with { ApiKey = "syn-asr" } }, "auto", "zh-Hans");
+        await main.TestApplySettingsResultAsync(reconfiguredSettings);
+        await Idle(main);
+        check("A5: pipeline settings save reconfigures and restarts pipeline", main.TestRunning && main.TestSettings.Asr.Provider == "VolcengineAsr2");
+        check("A5: pipeline reconfigure retains previous subtitles on screen", main.TestVisibleParagraphs.Count == initialCount);
+
+        // 3. UI Status Badges and Button Semantics
+        // 3.1 Normal Listening state
+        for (int i = 0; i < 30; i++)
+        {
+            if (main.TestStatusText == "聆听中")
+                break;
+            await Task.Delay(50);
+            await Idle(main);
+        }
+        check("A5: listening state has green dot and stop button", main.TestStatusText == "聆听中" && main.TestStartButtonContent == "停止");
+
+        // 3.2 Translation Error state when MT fails while listening
+        currentAsr.Emit("err-mt", "Sentence with translation failure", "auto", startMs: 2000, durationMs: 500);
+        await currentTranslator.WaitForCountAsync(1);
+        currentTranslator.Fail(0, "service error");
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            if (main.TestStatusText == "翻译异常")
+                break;
+        }
+        check("A5: MT failure during listening reflects Amber 翻译异常 state", main.TestStatusText == "翻译异常");
+        check("A5: MT failure maintains stop button semantics", main.TestStartButtonContent == "停止");
+        check("A5: MT failure status tooltip explains error", main.TestStatusTip.Contains("翻译异常") || main.TestStatusTip.Contains("重试"));
+
+        // 3.3 Audio level silence diagnosis
+        main.TestSetAudibleTicks(0);
+        main.TestUpdateStatusDisplay();
+        check("A5: silence in listening diagnoses connected but no audio signal", main.TestStatusTip.Contains("已连接但无音频信号"));
+
+        main.TestSetAudibleTicks(DateTimeOffset.UtcNow.Ticks);
+        main.TestUpdateStatusDisplay();
+        check("A5: audible signal clears no audio diagnosis", !main.TestStatusTip.Contains("已连接但无音频信号"));
+
+        // 4. Scroll protection: user reading history is not yanked back by late dispatched ScrollBottom
+        main.SetExpanded(true);
+        await Idle(main);
+        main.TestSetFollowing(false);
+        main.TestScrollBottom();
+        check("A5: scroll bottom respects follow=false guard", !main.TestFollowing);
 
         await main.TestStopCaptureAsync();
         await Idle(main);

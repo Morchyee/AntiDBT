@@ -20,12 +20,15 @@ public sealed class MainWindow : Window
     readonly SettingsStore settingsStore = new(Path.Combine(AppContext.BaseDirectory, "data"));
     readonly bool persistSettings;
     AppSettings settings = ProviderCatalog.DefaultSettings();
-    readonly SubtitleStore store = new();
+    readonly SubtitleStore store;
     readonly ObservableCollection<SubtitleParagraph> paragraphs = new();
     double historyFont;
     bool historyShowSource;
     CaptionPipeline? pipeline;
     bool busy, closing, allowClose, expanded, follow = true, renderQueued, userResized, pipelineCleanupFailed;
+    long lastAudibleTicks;
+    PipelineState currentPipelineState = PipelineState.Stopped;
+    long lastDroppedChunks;
 
     readonly TextBox source = CaptionText(new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)));
     readonly TextBox target = CaptionText(Brushes.White);
@@ -108,6 +111,7 @@ public sealed class MainWindow : Window
     {
         persistSettings = !testMode;
         settings = LanguageSettings.Upgrade(settings);
+        store = new(settings.MaxHistory > 0 ? settings.MaxHistory : 2000);
         Resources["BoolToVis"] = new BooleanToVisibilityConverter();
         DesktopTheme.Apply(this, settings.Theme, settings.BackgroundOpacity);
 
@@ -414,6 +418,13 @@ public sealed class MainWindow : Window
         store.Changed += QueueRender;
         Loaded += async (_, _) => await InitializeAsync();
         Closing += OnClosing;
+        monitor.Tick += (_, _) =>
+        {
+            if (pipeline is not null && !pipeline.Completion.IsCompleted && currentPipelineState == PipelineState.Listening)
+            {
+                UpdateStatusDisplay();
+            }
+        };
         monitor.Start();
         ApplyTheme();
         RefreshLanguages();
@@ -482,23 +493,111 @@ public sealed class MainWindow : Window
 
     async Task OpenSettingsCoreAsync()
     {
-        await StopCaptureCoreAsync();
         var dialog = new SettingsWindow(settings) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
-            settings = dialog.Result;
-            ApplyTheme();
-            RefreshLanguages();
-            store.BeginSession();
-            Topmost = settings.Topmost;
-            Render();
-            if (await SaveSettingsAsync())
-                SetStatus("设置已保存 · 点击开始");
+            await ApplySettingsResultAsync(dialog.Result);
         }
         else
         {
             ApplyTheme();
         }
+    }
+
+    internal async Task ApplySettingsResultAsync(AppSettings newSettings)
+    {
+        var wasRunning = pipeline is not null && !pipeline.Completion.IsCompleted;
+        var pipelineChanged = HasPipelineConfigChanged(settings, newSettings);
+        if (pipelineChanged)
+        {
+            if (wasRunning)
+            {
+                await StopCaptureCoreAsync(StopReason.Reconfigure);
+                settings = newSettings;
+                ApplyTheme();
+                RefreshLanguages();
+                Topmost = settings.Topmost;
+                Render();
+                if (!await SaveSettingsAsync())
+                {
+                    SetStatus("设置保存失败，请检查写入权限", PipelineState.Error);
+                    return;
+                }
+                if (ProviderLanguages.ValidateSettings(settings) is { } validation)
+                {
+                    SetStatus(validation, PipelineState.Error);
+                    return;
+                }
+                await StartConfiguredPipelineAsync();
+                SetStatus("设置已保存并生效", PipelineState.Listening);
+            }
+            else
+            {
+                settings = newSettings;
+                ApplyTheme();
+                RefreshLanguages();
+                Topmost = settings.Topmost;
+                Render();
+                if (await SaveSettingsAsync())
+                    SetStatus("设置已保存 · 点击开始");
+            }
+        }
+        else
+        {
+            settings = newSettings;
+            ApplyTheme();
+            RefreshLanguages();
+            Topmost = settings.Topmost;
+            Render();
+            if (!await SaveSettingsAsync())
+            {
+                SetStatus("设置保存失败，请检查写入权限", PipelineState.Error);
+            }
+        }
+    }
+
+    static bool HasPipelineConfigChanged(AppSettings a, AppSettings b)
+    {
+        if (a.AudioDeviceId != b.AudioDeviceId) return true;
+        if (a.SourceLanguage != b.SourceLanguage) return true;
+        if (a.TargetLanguage != b.TargetLanguage) return true;
+        if (a.FallbackEnabled != b.FallbackEnabled) return true;
+        if (a.FallbackCostConsent != b.FallbackCostConsent) return true;
+        if (a.FallbackTranslationProviderId != b.FallbackTranslationProviderId) return true;
+
+        if (a.Asr.Provider != b.Asr.Provider ||
+            a.Asr.ApiKey != b.Asr.ApiKey ||
+            a.Asr.Endpoint != b.Asr.Endpoint ||
+            a.Asr.Model != b.Asr.Model ||
+            a.Asr.Language != b.Asr.Language ||
+            !DictionariesEqual(a.Asr.Options, b.Asr.Options) ||
+            !DictionariesEqual(a.Asr.Secrets, b.Asr.Secrets))
+            return true;
+
+        if (a.Translation.Provider != b.Translation.Provider ||
+            a.Translation.ApiKey != b.Translation.ApiKey ||
+            a.Translation.Endpoint != b.Translation.Endpoint ||
+            a.Translation.Model != b.Translation.Model ||
+            a.Translation.DebounceMilliseconds != b.Translation.DebounceMilliseconds ||
+            a.Translation.TimeoutSeconds != b.Translation.TimeoutSeconds ||
+            a.Translation.ContextSentences != b.Translation.ContextSentences ||
+            !DictionariesEqual(a.Translation.Options, b.Translation.Options) ||
+            !DictionariesEqual(a.Translation.Secrets, b.Translation.Secrets))
+            return true;
+
+        return false;
+    }
+
+    static bool DictionariesEqual(Dictionary<string, string>? x, Dictionary<string, string>? y)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x is null || y is null) return false;
+        if (x.Count != y.Count) return false;
+        foreach (var (k, v) in x)
+        {
+            if (!y.TryGetValue(k, out var vy) || v != vy) return false;
+        }
+        return true;
     }
 
     internal void ApplyLiveOpacity(double opacity)
@@ -564,12 +663,18 @@ public sealed class MainWindow : Window
                 return;
             SetStatus(s.Message, s.State, s.DroppedChunks);
         });
-        current.AudioLevelChanged += _ => { };
+        current.AudioLevelChanged += level =>
+        {
+            if (level > 50.0)
+                Interlocked.Exchange(ref lastAudibleTicks, DateTimeOffset.UtcNow.Ticks);
+        };
+        Interlocked.Exchange(ref lastAudibleTicks, 0);
         await current.StartAsync();
     }
 
     async Task StopCaptureCoreAsync(StopReason reason = StopReason.UserStop)
     {
+        Interlocked.Exchange(ref lastAudibleTicks, 0);
         if (pipeline is null)
             return;
         var previous = pipeline;
@@ -790,6 +895,8 @@ public sealed class MainWindow : Window
                 sourceViewport.ScrollToBottom();
                 targetViewport.ScrollToBottom();
             });
+
+        UpdateStatusDisplay();
     }
 
     DataTemplate ParagraphTemplate(double size, double line, bool showSource)
@@ -856,6 +963,8 @@ public sealed class MainWindow : Window
 
     void ScrollBottom()
     {
+        if (!follow)
+            return;
         var scroller = FindScroller(history);
         if (scroller is not null)
             scroller.ScrollToBottom();
@@ -867,53 +976,88 @@ public sealed class MainWindow : Window
     void SetStatus(string message, PipelineState? state = null, long dropped = 0)
     {
         statusMessage = message;
-        var tip = message;
-        if (dropped > 0)
-            tip += $" · 已丢弃 {dropped} 个过期音频块";
-        statusBadge.ToolTip = tip;
+        if (state.HasValue)
+            currentPipelineState = state.Value;
+        else if (pipeline is null || pipeline.Completion.IsCompleted)
+            currentPipelineState = PipelineState.Stopped;
+        else
+            currentPipelineState = PipelineState.Listening;
 
-        var effectiveState = state ?? (pipeline is not null && !pipeline.Completion.IsCompleted ? PipelineState.Listening : PipelineState.Stopped);
+        lastDroppedChunks = dropped;
+        UpdateStatusDisplay();
+    }
 
-        switch (effectiveState)
+    void UpdateStatusDisplay()
+    {
+        var hasTranslationError = paragraphs.Any(p => p.HasError);
+        var effectiveState = currentPipelineState;
+
+        var tip = statusMessage;
+        if (lastDroppedChunks > 0)
+            tip += $" · 已丢弃 {lastDroppedChunks} 个过期音频块";
+
+        if (effectiveState == PipelineState.Listening)
         {
-            case PipelineState.Listening:
+            if (hasTranslationError)
+            {
+                statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 179, 0)); // Amber #FFB300
+                statusText.Text = "翻译异常";
+                statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 179, 0));
+                start.Content = "停止";
+                tip += " · 存在未完成翻译错误，可在列表中点击重试";
+            }
+            else
+            {
                 statusDot.Background = new SolidColorBrush(Color.FromRgb(76, 175, 80)); // Green #4CAF50
                 statusText.Text = "聆听中";
                 statusText.Foreground = new SolidColorBrush(Color.FromRgb(76, 175, 80));
                 start.Content = "停止";
-                break;
-            case PipelineState.Connecting:
-                statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow #FFC107
-                statusText.Text = "连接中";
-                statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
-                start.Content = "停止";
-                break;
-            case PipelineState.Retrying:
-                statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange #FF9800
-                statusText.Text = "重试中";
-                statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
-                start.Content = "停止";
-                break;
-            case PipelineState.Stopping:
-                statusDot.Background = new SolidColorBrush(Color.FromRgb(200, 200, 200));
-                statusText.Text = "停止中";
-                statusText.Foreground = Brushes.Gray;
-                start.Content = "停止";
-                break;
-            case PipelineState.Error:
-                statusDot.Background = new SolidColorBrush(Color.FromRgb(244, 67, 54)); // Red #F44336
-                statusText.Text = "连接异常";
-                statusText.Foreground = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-                start.Content = "重试";
-                break;
-            case PipelineState.Stopped:
-            default:
-                statusDot.Background = new SolidColorBrush(Color.FromRgb(158, 158, 158)); // Gray #9E9E9E
-                statusText.Text = "未开始";
-                statusText.Foreground = Brushes.Gray;
-                start.Content = "开始";
-                break;
+            }
+
+            var lastAudible = Interlocked.Read(ref lastAudibleTicks);
+            if (lastAudible == 0 || DateTimeOffset.UtcNow.Ticks - lastAudible > TimeSpan.FromSeconds(3).Ticks)
+            {
+                tip += " · 已连接但无音频信号（请确认系统正在播放声音）";
+            }
         }
+        else
+        {
+            switch (effectiveState)
+            {
+                case PipelineState.Connecting:
+                    statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow #FFC107
+                    statusText.Text = "连接中";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
+                    start.Content = "停止";
+                    break;
+                case PipelineState.Retrying:
+                    statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange #FF9800
+                    statusText.Text = "重试中";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
+                    start.Content = "停止";
+                    break;
+                case PipelineState.Stopping:
+                    statusDot.Background = new SolidColorBrush(Color.FromRgb(200, 200, 200));
+                    statusText.Text = "停止中";
+                    statusText.Foreground = Brushes.Gray;
+                    start.Content = "停止";
+                    break;
+                case PipelineState.Error:
+                    statusDot.Background = new SolidColorBrush(Color.FromRgb(244, 67, 54)); // Red #F44336
+                    statusText.Text = "连接异常";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(244, 67, 54));
+                    start.Content = "重试";
+                    break;
+                case PipelineState.Stopped:
+                default:
+                    statusDot.Background = new SolidColorBrush(Color.FromRgb(158, 158, 158)); // Gray #9E9E9E
+                    statusText.Text = "未开始";
+                    statusText.Foreground = Brushes.Gray;
+                    start.Content = "开始";
+                    break;
+            }
+        }
+        statusBadge.ToolTip = tip;
     }
 
     public async Task CloseAsync()
@@ -989,6 +1133,15 @@ public sealed class MainWindow : Window
     internal double TestCompactOffset => Math.Max(sourceViewport.VerticalOffset, FindScroller(history)?.VerticalOffset ?? 0);
     internal ListBox TestHistory => history;
     internal Button TestBottomButton => bottom;
+    internal string TestStatusText => statusText.Text;
+    internal string TestStatusTip => statusBadge.ToolTip as string ?? "";
+    internal string TestStartButtonContent => start.Content as string ?? "";
+    internal void TestOpenSettingsCancel() => ApplyTheme();
+    internal Task TestApplySettingsResultAsync(AppSettings newSettings) => ApplySettingsResultAsync(newSettings);
+    internal void TestSetAudibleTicks(long ticks) => Interlocked.Exchange(ref lastAudibleTicks, ticks);
+    internal void TestUpdateStatusDisplay() => UpdateStatusDisplay();
+    internal void TestSetFollowing(bool value) => follow = value;
+    internal void TestScrollBottom() => ScrollBottom();
     internal void TestSetUserResized(bool value)
     {
         userResized = value;

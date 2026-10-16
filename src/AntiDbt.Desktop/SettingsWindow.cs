@@ -143,7 +143,9 @@ public sealed class SettingsWindow : Window
     }
     AppSettings BuildResult()
     {
-        asr.Snapshot(); mt.Snapshot(); ValidateEndpoint(asrProfiles[asr.Id].Endpoint); ValidateEndpoint(mtProfiles[mt.Id].Endpoint);
+        asr.Snapshot(); mt.Snapshot();
+        ValidateEndpoint(asr.Id, asrProfiles[asr.Id].Endpoint, asrProfiles[asr.Id].Options);
+        ValidateEndpoint(mt.Id, mtProfiles[mt.Id].Endpoint, mtProfiles[mt.Id].Options);
         if (!int.TryParse(debounce.Text, out var delay) || delay < 0 || delay > 2000 || !int.TryParse(timeout.Text, out var seconds) || seconds < 1 || seconds > 120 || !int.TryParse(context.Text, out var count) || count < 0 || count > 12) throw new ArgumentException("请填写有效的合并间隔、超时和上下文句数。");
         var translation = mtProfiles[mt.Id] with { DebounceMilliseconds = delay, TimeoutSeconds = seconds, ContextSentences = count }; mtProfiles[mt.Id] = translation;
         var value = original with { Asr = asrProfiles[asr.Id], Translation = translation, AsrProfiles = new(asrProfiles), TranslationProfiles = new(mtProfiles), SourceLanguage = sourceId, TargetLanguage = targetId, Theme = theme.SelectedItem as string ?? "System", FallbackEnabled = fallback.IsChecked == true, FallbackCostConsent = consent.IsChecked == true, FallbackTranslationProviderId = backup.SelectedValue as string ?? "", FontSize = font.SelectedItem as string ?? "medium", ShowSource = source.IsChecked == true, Topmost = pin.IsChecked == true, AudioDeviceId = devices.SelectedValue as string ?? "", BackgroundOpacity = opacity.Value / 100.0 };
@@ -151,10 +153,22 @@ public sealed class SettingsWindow : Window
     }
     internal void TestSave() => Save(false);
     void Save(bool close = true) { try { Result = BuildResult(); if (close) DialogResult = true; } catch (ArgumentException e) { error.Text = e.Message; } }
-    static void ValidateEndpoint(string text)
+    internal static void TestValidateEndpoint(string providerId, string text, Dictionary<string, string> options) => ValidateEndpoint(providerId, text, options);
+    static void ValidateEndpoint(string providerId, string text, Dictionary<string, string> options)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (!Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "wss") || uri.IsLoopback || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0) throw new ArgumentException("接口地址须使用公开 HTTPS/WSS，且不能包含用户名、查询参数或片段。");
+        var trimmed = text.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            throw new ArgumentException("接口地址必须是有效的绝对 URL。");
+        if (uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0)
+            throw new ArgumentException("接口地址不能包含用户名、查询参数或片段。");
+
+        if (providerId == "OpenAiCompatible" && options.GetValueOrDefault("allowLocalHttp") == "true" && uri.Scheme == "http" && uri.IsLoopback)
+            return;
+
+        var expectedScheme = providerId == "VolcengineAsr2" ? "wss" : "https";
+        if (uri.Scheme != expectedScheme || uri.IsLoopback)
+            throw new ArgumentException($"接口地址须使用安全协议 {expectedScheme}:// 且不能为本机回环地址（如需本机 HTTP 请使用 OpenAiCompatible 并明确启用 allowLocalHttp）。");
     }
     static void Heading(Panel p, string text) => p.Children.Add(new TextBlock { Text = text, FontSize = 17, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
     static void Field(Panel p, string label, FrameworkElement control) { p.Children.Add(new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap }); p.Children.Add(control); }

@@ -25,6 +25,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
     public TimeSpan StableHealthyPeriod { get; set; } = TimeSpan.FromSeconds(5);
     public TimeSpan InitialRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMilliseconds(5000);
+    public bool ClearStoreOnStart { get; set; }
     public event Action<PipelineStatus>? StatusChanged;
     public event Action<double>? AudioLevelChanged;
     public Task Completion { get; private set; } = Task.CompletedTask;
@@ -99,7 +100,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                         break;
                     sessionConnectedTimestamp = Stopwatch.GetTimestamp();
                     _translations.CancelPending();
-                    var generation = Store.BeginSession(first);
+                    var generation = Store.BeginSession(ClearStoreOnStart && first);
                     first = false;
                     Publish(PipelineState.Listening, "正在聆听系统音频");
                     var anchors = new List<(double End, long Timestamp)>();
