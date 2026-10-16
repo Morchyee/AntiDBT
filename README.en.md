@@ -32,8 +32,9 @@ Built following a clean-room development paradigm, antiDBT **does not utilize an
 
 ## ✨ Key Features
 
-### 1. 🛡️ Industrial-Grade High Reliability (Phase 5.3 Evolution)
+### 1. 🛡️ Reliability & Stability Hardening (Phase 5.3 Focus)
 - **Zero Trailing Sentence Loss on Stop**: Stopping capture triggers a bounded drain window where accepted audio blocks, delayed final transcripts, and pending translations are completed and rendered before closing.
+- **Audio Freshness Bounded Buffer & Expiry Pruning**: Bounded queue with 50-chunk capacity (~1.0s audio) and a 2.0-second chunk expiry threshold; stale chunks overflowing due to network bottlenecks are discarded with accurate discontinuity telemetry, preventing latency snowballing.
 - **Ghost Translation Cleanup & Draft Validation**: Stale provisional translations are immediately evicted when source speech revisions clear or invalidate text. Strict prefix-extension compatibility checks guarantee delayed stale responses never pollute active subtitles.
 - **Korean Inter-Word Spacing Preservation**: Resolves syllable-level agglutination issues in streaming buffers, ensuring natural spacing and readable Korean translations.
 - **Continuous Health Retry Budget & Rate-Limit Backoff**: Consecutive connection failures respect a bounded retry budget reset only after continuous healthy streaming. Automatic HTTP 429 extraction strictly honors server `Retry-After` headers, preventing redundant billing and rate throttling.
@@ -77,7 +78,7 @@ Built following a clean-room development paradigm, antiDBT **does not utilize an
 
 - **Operating System**: Windows 10 / Windows 11 (x64)
 - **Audio Architecture**: Any soundcard/device supporting WASAPI loopback (standard system output, speakers, headphones)
-- **Portable Runtime**: The binary release includes a self-contained .NET 9 runtime; **no separate .NET SDK or runtime installation is required for end users**.
+- **Portable Runtime**: The binary release includes a self-contained .NET 9 runtime; **no separate .NET SDK or runtime installation is required for end users**. .NET 10 LTS support is under active evaluation in a dedicated branch.
 
 ---
 
@@ -129,11 +130,12 @@ pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.3-beta"
 
 ---
 
-## ⚠️ Known Limitations
+## ⚠️ Known Limitations & Testing Boundaries
 
 1. **Cloud API Credentials**: Active speech recognition and translation require valid API keys from your chosen providers.
-2. **WASAPI Exclusive Mode**: If an audio player or DAW runs in Exclusive Mode, WASAPI loopback capture may be blocked; ensure shared audio mode is selected.
-3. **Firewall Prompt**: Allow antiDBT through Windows Defender Firewall when prompted so that outbound API requests can connect.
+2. **Testing vs. Live Service Boundaries**: The 100% pass rate in our local 12-suite regression harness and CI smoke tests proves internal state machine, audio loopback, and UI contract correctness, but **does not guarantee external cloud provider uptime, network resilience, or quota availability during 24/7 continuous operation**. Live performance depends on external API health and network connectivity.
+3. **WASAPI Exclusive Mode**: If an audio player or DAW runs in Exclusive Mode, WASAPI loopback capture may be blocked; ensure shared audio mode is selected.
+4. **Firewall Prompt**: Allow antiDBT through Windows Defender Firewall when prompted so that outbound API requests can connect.
 
 ---
 
