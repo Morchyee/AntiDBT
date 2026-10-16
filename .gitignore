@@ -27,3 +27,5 @@ smoke-verify/
 # AI Agent and local assistant configurations
 .agents/
 .superpowers/
+docs/superpowers/
+models/

@@ -30,6 +30,8 @@ public static class ProviderCatalog
     {
         "VolcengineAsr2"=>new VolcengineAsrProvider(),
         "GroqWhisper"=>new GroqWhisperProvider(),
+        "SherpaOnnx" or "SherpaOnnxStreaming"=>new SherpaOnnxStreamingAsrProvider(),
+        "HybridStreamingAsr"=>new HybridStreamingAsrProvider(),
         "AzureSpeech"=>new AntiDbt.CloudSpeech.AzureSpeechProvider(),
         "GoogleCloudSpeech"=>new AntiDbt.CloudSpeech.GoogleSpeechProvider(),
         _=>throw new NotSupportedException("所选语音服务尚未支持；LiveInterpret 国内协议仍待验证。")

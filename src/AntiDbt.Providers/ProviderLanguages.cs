@@ -27,6 +27,7 @@ public static class ProviderLanguages
     public static ProviderLanguageCapabilities DescribeAsr(AsrConfiguration c)=>c.Provider switch
     {
         "VolcengineAsr2"=>new(c.Provider,true,true,true,Snapshot,"当前 async 模型为中英混合识别；不支持强制语种或保证繁体输出。"),
+        "SherpaOnnx" or "SherpaOnnxStreaming" or "HybridStreamingAsr"=>new(c.Provider,true,true,true,Snapshot,"本地 sherpa-onnx 离线流式识别/混合识别；原生支持中英双语、英语及模型实际支持的语言。"),
         "GroqWhisper"=>new(c.Provider,true,false,true,Snapshot,"Whisper 多语言分段转写；中文使用 zh，不能保证强制繁体字形。"),
         "AzureSpeech"=>new(c.Provider,false,true,true,Snapshot,"当前连续识别适配器使用固定语言；未启用候选语言自动检测。"),
         "GoogleCloudSpeech"=>new(c.Provider,false,true,true,Snapshot,"当前 V2 long、global/us/eu 能力表；中文、希腊语、希伯来语、马来语不可用。"),
@@ -37,6 +38,7 @@ public static class ProviderLanguages
         source=LanguageRegistry.Normalize(source);
         if(LanguageRegistry.Find(source)==null)return "当前源语言未在统一语言目录中。";
         var cap=DescribeAsr(c);
+        if(c.Provider is "SherpaOnnx" or "SherpaOnnxStreaming" or "HybridStreamingAsr")return null;
         if(c.Provider=="GroqWhisper"&&c.Model is not ("whisper-large-v3-turbo" or "whisper-large-v3"))return "此 Whisper 模型未验证多语言能力。";
         if(source=="auto")return cap.AutoSource?null:"当前识别适配器未实现自动语言检测，请明确选择源语言。";
         if(c.Provider=="VolcengineAsr2")return "火山 async 当前采用中英混合识别，audio.language 不支持强制指定；请选择自动检测。";
@@ -58,6 +60,7 @@ public static class ProviderLanguages
         if(ValidateAsr(config,source) is { } reason)throw new ProviderException(ProviderErrorKind.UnsupportedLanguage,reason);
         source=LanguageRegistry.Normalize(source);
         if(source=="auto")return "";
+        if(config.Provider is "SherpaOnnx" or "SherpaOnnxStreaming" or "HybridStreamingAsr")return source is "zh-Hans" or "zh-Hant" ? "zh" : Base(source);
         if(config.Provider=="GroqWhisper")return source is "zh-Hans" or "zh-Hant"?"zh":Base(source);
         var code=SpeechLocales[source];
         return config.Provider=="GoogleCloudSpeech"&&source=="no"?"no-NO":code;

@@ -26,6 +26,7 @@ public static class ServiceGuides
     {
         "BaiduTranslate"=>new("https://fanyi-api.baidu.com/","https://fanyi-api.baidu.com/doc/21","https://fanyi-api.baidu.com/","APPID + 密钥；高级语言须确认权益，免费额度以账户为准。"),
         "AliyunMT"=>new("https://www.aliyun.com/product/ai/alimt","https://help.aliyun.com/zh/machine-translation/","https://help.aliyun.com/zh/machine-translation/product-overview/billing-methods","AccessKey ID / Secret 均加密；在途 SDK 请求可能继续完成。"),
+        "SherpaOnnx" or "HybridStreamingAsr"=>new("https://k2-fsa.github.io/sherpa/onnx/","https://k2-fsa.github.io/sherpa/onnx/","","本地离线 sherpa-onnx 模型推理，无 API 费用；混合模式可选用 Groq Whisper 生成整句 Final。"),
         "DeepL"=>new("https://www.deepl.com/pro-api","https://developers.deepl.com/docs/","https://www.deepl.com/pro-api","可选 Free/Pro 服务，其他 MT 无需 DeepL 密钥。"),
         "GroqWhisper" or "GroqLlm"=>new("https://console.groq.com/","https://console.groq.com/docs/","https://console.groq.com/docs/billing-faqs","Whisper 为分段 Final-only；文本模型语言由所选模型决定。"),
         "AzureSpeech" or "AzureTranslator"=>new("https://portal.azure.com/","https://learn.microsoft.com/en-us/azure/ai-services/","https://azure.microsoft.com/pricing/","Speech 与 Translator 资源及密钥独立；区域须匹配资源。"),
