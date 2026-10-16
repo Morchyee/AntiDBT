@@ -819,6 +819,53 @@ await TestAsync("telemetry TotalPipelineMs anchors to audio capture and records 
     Check(records.Any(r => r.Outcome == TelemetryOutcome.Cancelled), "StopAsync must record Cancelled telemetry record");
 });
 
+Test("SubtitleParagraph INotifyPropertyChanged fires on in-place update", () => {
+    var p1 = new SubtitleParagraph("Hello", "", false, null, 1, "seg1", 1, false);
+    var changedProperties = new List<string>();
+    p1.PropertyChanged += (sender, args) => {
+        if (args.PropertyName != null) changedProperties.Add(args.PropertyName);
+    };
+
+    var p2 = new SubtitleParagraph("Hello world", "你好世界", false, null, 1, "seg1", 2, false);
+    p1.UpdateFrom(p2);
+
+    Check(p1.Source == "Hello world", "Source was not updated in place");
+    Check(p1.Translation == "你好世界", "Translation was not updated in place");
+    Check(p1.Revision == 2, "Revision was not updated in place");
+    Check(changedProperties.Contains(nameof(SubtitleParagraph.Source)), "PropertyChanged did not fire for Source");
+    Check(changedProperties.Contains(nameof(SubtitleParagraph.Translation)), "PropertyChanged did not fire for Translation");
+    Check(changedProperties.Contains(nameof(SubtitleParagraph.Revision)), "PropertyChanged did not fire for Revision");
+    Check(p1.Equals(p2), "p1 should equal p2 after in-place update");
+});
+
+Test("Partial to Partial to Final updates same segment in store and projection", () => {
+    var store = new SubtitleStore();
+    var session = store.BeginSession();
+
+    store.ApplySource(session, new AsrResult("seg-1", 1, "Testing", false, TimeSpan.Zero, TimeSpan.FromSeconds(1)));
+    var p1 = SubtitleProjection.Expanded(store.Snapshot(), session);
+    Check(p1.Count == 1 && p1[0].Source == "Testing", "Initial partial failed to appear immediately");
+
+    store.ApplySource(session, new AsrResult("seg-1", 2, "Testing real-time", false, TimeSpan.Zero, TimeSpan.FromSeconds(2)));
+    var p2 = SubtitleProjection.Expanded(store.Snapshot(), session);
+    Check(p2.Count == 1 && p2[0].Source == "Testing real-time", "Partial revision failed to update in place");
+
+    store.ApplySource(session, new AsrResult("seg-1", 3, "Testing real-time subtitles.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3)));
+    var p3 = SubtitleProjection.Expanded(store.Snapshot(), session);
+    Check(p3.Count == 1 && p3[0].Source == "Testing real-time subtitles.", "Final result failed to finalize same segment");
+});
+
+Test("LatencyMonitor records UI apply latency and computes P50 and P95", () => {
+    var monitor = new LatencyMonitor();
+    for (int i = 1; i <= 100; i++) {
+        monitor.Record(TimeSpan.FromMilliseconds(i));
+    }
+    var snapshot = monitor.Snapshot();
+    Check(snapshot.Count == 100, $"Expected 100 samples, got {snapshot.Count}");
+    Check(snapshot.MedianMilliseconds >= 50 && snapshot.MedianMilliseconds <= 51, $"Expected P50 ~50.5, got {snapshot.MedianMilliseconds}");
+    Check(snapshot.P95Milliseconds >= 94 && snapshot.P95Milliseconds <= 96, $"Expected P95 ~95, got {snapshot.P95Milliseconds}");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

@@ -1,20 +1,154 @@
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace AntiDbt.Core;
 
-public sealed record SubtitleParagraph(
-    string Source,
-    string Translation,
-    bool TranslationPending = false,
-    string? TranslationError = null,
-    long SessionId = 0,
-    string SegmentId = "",
-    int Revision = 0,
-    bool CanRetry = false)
+public sealed class SubtitleParagraph : INotifyPropertyChanged, IEquatable<SubtitleParagraph>
 {
+    private string _source;
+    private string _translation;
+    private bool _translationPending;
+    private string? _translationError;
+    private long _sessionId;
+    private string _segmentId;
+    private int _revision;
+    private bool _canRetry;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public SubtitleParagraph(
+        string source,
+        string translation,
+        bool translationPending = false,
+        string? translationError = null,
+        long sessionId = 0,
+        string segmentId = "",
+        int revision = 0,
+        bool canRetry = false)
+    {
+        _source = source ?? "";
+        _translation = translation ?? "";
+        _translationPending = translationPending;
+        _translationError = translationError;
+        _sessionId = sessionId;
+        _segmentId = segmentId ?? "";
+        _revision = revision;
+        _canRetry = canRetry;
+    }
+
+    public string Source
+    {
+        get => _source;
+        set => SetField(ref _source, value ?? "");
+    }
+
+    public string Translation
+    {
+        get => _translation;
+        set => SetField(ref _translation, value ?? "");
+    }
+
+    public bool TranslationPending
+    {
+        get => _translationPending;
+        set
+        {
+            if (SetField(ref _translationPending, value))
+            {
+                OnPropertyChanged(nameof(TranslationOpacity));
+            }
+        }
+    }
+
+    public string? TranslationError
+    {
+        get => _translationError;
+        set
+        {
+            if (SetField(ref _translationError, value))
+            {
+                OnPropertyChanged(nameof(HasError));
+                OnPropertyChanged(nameof(ErrorDisplay));
+            }
+        }
+    }
+
+    public long SessionId
+    {
+        get => _sessionId;
+        set => SetField(ref _sessionId, value);
+    }
+
+    public string SegmentId
+    {
+        get => _segmentId;
+        set => SetField(ref _segmentId, value ?? "");
+    }
+
+    public int Revision
+    {
+        get => _revision;
+        set => SetField(ref _revision, value);
+    }
+
+    public bool CanRetry
+    {
+        get => _canRetry;
+        set => SetField(ref _canRetry, value);
+    }
+
     public bool HasError => !string.IsNullOrEmpty(TranslationError);
     public string ErrorDisplay => string.IsNullOrEmpty(TranslationError) ? "" : $"⚠️ 翻译异常: {TranslationError}";
     public double TranslationOpacity => TranslationPending ? 0.65 : 1.0;
+
+    public void UpdateFrom(SubtitleParagraph other)
+    {
+        if (other is null) return;
+        Source = other.Source;
+        Translation = other.Translation;
+        TranslationPending = other.TranslationPending;
+        TranslationError = other.TranslationError;
+        SessionId = other.SessionId;
+        SegmentId = other.SegmentId;
+        Revision = other.Revision;
+        CanRetry = other.CanRetry;
+    }
+
+    private bool SetField<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+            return false;
+        field = value;
+        OnPropertyChanged(propertyName);
+        return true;
+    }
+
+    private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    public bool Equals(SubtitleParagraph? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return _source == other._source &&
+               _translation == other._translation &&
+               _translationPending == other._translationPending &&
+               _translationError == other._translationError &&
+               _sessionId == other._sessionId &&
+               _segmentId == other._segmentId &&
+               _revision == other._revision &&
+               _canRetry == other._canRetry;
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as SubtitleParagraph);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(_source, _translation, _translationPending, _translationError, _sessionId, _segmentId, _revision, _canRetry);
+
+    public static bool operator ==(SubtitleParagraph? left, SubtitleParagraph? right) => Equals(left, right);
+    public static bool operator !=(SubtitleParagraph? left, SubtitleParagraph? right) => !Equals(left, right);
 }
 
 public static class SubtitleProjection

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -30,6 +31,7 @@ public sealed class MainWindow : Window
     long lastAudibleTicks;
     PipelineState currentPipelineState = PipelineState.Stopped;
     long lastDroppedChunks;
+    public LatencyMonitor UiRenderLatency { get; } = new();
 
     readonly TextBox source = CaptionText(new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)));
     readonly TextBox target = CaptionText(Brushes.White);
@@ -850,7 +852,7 @@ public sealed class MainWindow : Window
                 return;
             renderQueued = true;
         }
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, () =>
         {
             lock (store)
                 renderQueued = false;
@@ -923,12 +925,37 @@ public sealed class MainWindow : Window
         for (int i = 0; i < updated.Count; i++)
         {
             if (i >= paragraphs.Count)
+            {
                 paragraphs.Add(updated[i]);
-            else if (paragraphs[i] != updated[i])
+            }
+            else if (paragraphs[i].SessionId == updated[i].SessionId && paragraphs[i].SegmentId == updated[i].SegmentId)
+            {
+                if (!Equals(paragraphs[i], updated[i]))
+                {
+                    paragraphs[i].UpdateFrom(updated[i]);
+                }
+            }
+            else
+            {
                 paragraphs[i] = updated[i];
+            }
         }
         while (paragraphs.Count > updated.Count)
             paragraphs.RemoveAt(paragraphs.Count - 1);
+
+        if (rows.Count > 0)
+        {
+            var latest = rows[^1];
+            var elapsed = Stopwatch.GetElapsedTime(latest.ReceivedTimestamp);
+            if (elapsed >= TimeSpan.Zero && elapsed < TimeSpan.FromMinutes(1))
+            {
+                UiRenderLatency.Record(elapsed);
+                if (pipeline is not null && !pipeline.Completion.IsCompleted)
+                {
+                    pipeline.UiRenderLatency.Record(elapsed);
+                }
+            }
+        }
 
         if (history.ItemTemplate is null || historyFont != size || historyShowSource != settings.ShowSource)
         {
@@ -959,7 +986,7 @@ public sealed class MainWindow : Window
         void Add(string property, double s, Brush brush)
         {
             var text = new FrameworkElementFactory(typeof(TextBox));
-            text.SetBinding(TextBox.TextProperty, new System.Windows.Data.Binding(property));
+            text.SetBinding(TextBox.TextProperty, new System.Windows.Data.Binding(property) { Mode = BindingMode.OneWay });
             text.SetValue(TextBox.IsReadOnlyProperty, true);
             text.SetValue(TextBox.IsReadOnlyCaretVisibleProperty, false);
             text.SetValue(TextBox.BackgroundProperty, Brushes.Transparent);
@@ -1182,6 +1209,7 @@ public sealed class MainWindow : Window
     internal string TestTarget => target.Text;
     internal int TestHistoryCount => history.Items.Count;
     internal IReadOnlyList<SubtitleParagraph> TestVisibleParagraphs => paragraphs.ToArray();
+    internal LatencyMonitor TestUiLatency => UiRenderLatency;
     internal bool TestFollowing => follow;
     internal ScrollViewer? TestScroller => FindScroller(history);
     internal double TestCompactOffset => Math.Max(sourceViewport.VerticalOffset, FindScroller(history)?.VerticalOffset ?? 0);

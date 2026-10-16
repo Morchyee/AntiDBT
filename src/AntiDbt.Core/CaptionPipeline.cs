@@ -21,6 +21,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
     }
     public LatencyMonitor AsrLatency { get; } = new();
     public LatencyMonitor TranslationLatency => _translations.RequestLatency;
+    public LatencyMonitor UiRenderLatency { get; } = new();
     public AudioQueueStats AudioStats => _queue.GetStats();
     public long DroppedAudioChunks => _queue.DroppedChunks;
     public long AudioDiscontinuities => _queue.Discontinuities;
