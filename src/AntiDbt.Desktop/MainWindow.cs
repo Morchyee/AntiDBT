@@ -619,24 +619,18 @@ public sealed class MainWindow : Window
     {
         if (pipeline is not null)
         {
-            if (pipelineCleanupFailed)
-            {
-                SetStatus("前次资源尚未释放，正在尝试强制清理…", PipelineState.Stopping);
-                try
-                {
-                    await pipeline.DisposeAsync();
-                    pipeline = null;
-                    pipelineCleanupFailed = false;
-                }
-                catch (Exception ex)
-                {
-                    SetStatus($"前次音频或服务资源无法释放: {ex.Message}，禁止重复启动", PipelineState.Error);
-                    throw new InvalidOperationException("Previous pipeline failed to clean up.", ex);
-                }
-            }
-            else
+            SetStatus("前次资源尚未释放，正在尝试清理…", PipelineState.Stopping);
+            try
             {
                 await pipeline.DisposeAsync();
+                pipeline = null;
+                pipelineCleanupFailed = false;
+            }
+            catch (Exception ex)
+            {
+                pipelineCleanupFailed = true;
+                SetStatus($"前次音频或服务资源无法释放: {ex.Message}，禁止重复启动", PipelineState.Error);
+                throw new InvalidOperationException("Previous pipeline failed to clean up.", ex);
             }
         }
         pipeline = new(audio, asr, translator, settings, store);
@@ -645,10 +639,13 @@ public sealed class MainWindow : Window
 
     async Task StartPipelineInstanceAsync(CaptionPipeline current)
     {
-        if (pipelineCleanupFailed && pipeline is not null && !ReferenceEquals(pipeline, current))
+        if (pipeline is not null && !ReferenceEquals(pipeline, current))
         {
-            SetStatus("前次资源释放失败，禁止启动新管线", PipelineState.Error);
-            throw new InvalidOperationException("Previous pipeline failed to clean up.");
+            if (pipelineCleanupFailed || !pipeline.Completion.IsCompleted)
+            {
+                SetStatus("前次资源释放失败，禁止启动新管线", PipelineState.Error);
+                throw new InvalidOperationException("Previous pipeline failed to clean up.");
+            }
         }
         pipeline = current;
         current.StatusChanged += s => Dispatcher.BeginInvoke(() =>

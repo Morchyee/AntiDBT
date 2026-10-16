@@ -11,7 +11,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
     private readonly TranslationScheduler _translations; private readonly BoundedAudioQueue _queue = new(50);
     private CancellationTokenSource? _lifetime; private Task? _capture;
     private volatile bool _stopRequested, _captureEnded; private bool _disposed;
-    private readonly SemaphoreSlim _stopGate = new(1, 1); private bool _stopCompleted;
+    private readonly SemaphoreSlim _stopGate = new(1, 1); private bool _stopCompleted; private volatile bool _stopAttempted;
     private readonly SemaphoreSlim _disposeGate = new(1, 1); private bool _disposalStarted;
     public SubtitleStore Store
     {
@@ -300,12 +300,18 @@ public sealed class CaptionPipeline : IAsyncDisposable
         await _stopGate.WaitAsync(token);
         try
         {
-            if (_stopCompleted)
+            if (_stopCompleted || Completion.IsCompleted)
+            {
+                _stopCompleted = true;
                 return;
+            }
             if (_lifetime is null)
+            {
+                _stopCompleted = true;
                 return;
+            }
+            _stopAttempted = true;
             _stopRequested = true;
-
             if (reason is StopReason.Reconfigure or StopReason.Shutdown)
             {
                 Publish(PipelineState.Stopping, reason == StopReason.Reconfigure ? "正在切换配置并停止旧会话…" : "正在停止…");
@@ -319,10 +325,12 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 {
                     await _audio.StopAsync(quickDeadline.Token);
                     await Completion.WaitAsync(quickDeadline.Token);
+                    _stopCompleted = true;
                 }
-                catch (OperationCanceledException) { }
-                catch (TimeoutException) { }
-                _stopCompleted = true;
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Pipeline reconfiguration stop timed out before background session completion.");
+                }
                 return;
             }
 
@@ -333,20 +341,25 @@ public sealed class CaptionPipeline : IAsyncDisposable
             {
                 await _audio.StopAsync(deadline.Token);
                 await Completion.WaitAsync(deadline.Token);
+                _stopCompleted = true;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
             {
                 _lifetime.Cancel();
+                using var drainTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                drainTimeout.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
-                    await Completion.WaitAsync(TimeSpan.FromSeconds(2), token);
+                    await Completion.WaitAsync(drainTimeout.Token);
+                    _stopCompleted = true;
                 }
-                catch (OperationCanceledException) { }
-                catch (TimeoutException) { }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Pipeline stop timed out before background session completion.");
+                }
             }
             _translations.CancelPending();
             Store.BeginSession(false);
-            _stopCompleted = true;
         }
         finally { _stopGate.Release(); }
     }
@@ -357,15 +370,63 @@ public sealed class CaptionPipeline : IAsyncDisposable
         {
             if (_disposed)
                 return;
-            await StopAsync();
             _disposalStarted = true;
             _lifetime?.Cancel();
+
+            Exception? stopEx = null;
+            if (Completion.IsCompleted)
+            {
+                _stopCompleted = true;
+            }
+            else if (!_stopCompleted && !_stopAttempted)
+            {
+                try
+                {
+                    await StopAsync(StopReason.Shutdown);
+                }
+                catch (Exception ex)
+                {
+                    stopEx = ex;
+                }
+            }
+
+            Exception? audioEx = null;
             try
             {
                 await _audio.DisposeAsync();
-                _disposed = true;
             }
-            finally { await _translations.DisposeAsync(); if (_disposed) _lifetime?.Dispose(); }
+            catch (Exception ex)
+            {
+                audioEx = ex;
+            }
+
+            Exception? transEx = null;
+            try
+            {
+                await _translations.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                transEx = ex;
+            }
+
+            if (audioEx is not null)
+                throw audioEx;
+            if (transEx is not null)
+                throw transEx;
+
+            if (Completion.IsCompleted)
+            {
+                _disposed = true;
+                _stopCompleted = true;
+                _lifetime?.Dispose();
+                if (stopEx is not null && stopEx is not TimeoutException)
+                    throw stopEx;
+            }
+            else
+            {
+                throw new TimeoutException("Pipeline DisposeAsync timed out; background session remains active.", stopEx);
+            }
         }
         finally { _disposeGate.Release(); }
     }

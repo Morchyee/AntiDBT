@@ -499,6 +499,69 @@ await TestAsync("telemetry export is anonymized without credentials, keys or raw
     await File.WriteAllTextAsync(Path.Combine(artifactDir, "diagnostic-telemetry-sample.json"), json);
 });
 
+await TestAsync("uncooperative ASR write times out StopAsync and preserves failure state on DisposeAsync", async () => {
+    var audio = new TestAudioSource();
+    var asr = new UncooperativeSendAsr();
+    var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new());
+    await p.StartAsync();
+    audio.Push();
+    await asr.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    bool stopTimedOut = false;
+    try
+    {
+        await p.StopAsync(StopReason.Reconfigure);
+    }
+    catch (TimeoutException)
+    {
+        stopTimedOut = true;
+    }
+    Check(stopTimedOut, "StopAsync should throw TimeoutException on uncooperative ASR");
+    Check(!p.Completion.IsCompleted, "Completion must not be marked complete when session is still running");
+
+    bool disposeTimedOut = false;
+    try
+    {
+        await p.DisposeAsync();
+    }
+    catch (TimeoutException)
+    {
+        disposeTimedOut = true;
+    }
+    Check(disposeTimedOut, "DisposeAsync should throw TimeoutException while session remains active");
+    Check(asr.Disposals == 0, "ASR session must not be claimed disposed while still running");
+
+    asr.Release.TrySetResult();
+    await p.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    await p.DisposeAsync();
+    Check(asr.Disposals == 1, $"ASR session must be disposed exactly once, got {asr.Disposals}");
+});
+
+await TestAsync("uncooperative ASR connect times out StopAsync and prevents false completion", async () => {
+    var audio = new TestAudioSource();
+    var asr = new UncooperativeConnectAsr();
+    var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new());
+    await p.StartAsync();
+    await asr.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+    bool stopTimedOut = false;
+    try
+    {
+        await p.StopAsync(StopReason.Reconfigure);
+    }
+    catch (TimeoutException)
+    {
+        stopTimedOut = true;
+    }
+    Check(stopTimedOut, "StopAsync should throw TimeoutException when connect blocks");
+    Check(!p.Completion.IsCompleted, "Completion must not be completed while connect is in flight");
+
+    asr.Release.TrySetResult();
+    await p.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    await p.DisposeAsync();
+    Check(asr.Disposals == 1, $"ASR session must be disposed exactly once, got {asr.Disposals}");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

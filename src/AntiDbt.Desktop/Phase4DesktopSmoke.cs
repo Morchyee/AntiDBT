@@ -254,6 +254,38 @@ internal static class Phase4DesktopSmoke
         try { await main.TestStopCaptureAsync(); } catch { }
         await Idle(main);
 
+        // 4.1 Uncooperative ASR session preserves failure state & prevents conflicting start
+        var uncoopAsr = new UncooperativeSendAsr();
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(new FixtureAudio(), uncoopAsr, new FixtureTranslator(), settings, store);
+
+        await main.TestStartAsync();
+        await Idle(main);
+        await uncoopAsr.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        try { await main.TestStopCaptureAsync(StopReason.Reconfigure); } catch { }
+        await Idle(main);
+        check("uncooperative ASR stop marks pipeline cleanup failed", main.TestPipelineCleanupFailed);
+
+        bool uncoopConflictBlocked = false;
+        try
+        {
+            await main.TestStartAsync();
+            await Idle(main);
+        }
+        catch
+        {
+            uncoopConflictBlocked = true;
+        }
+        check("uncooperative ASR prevents conflicting start", uncoopConflictBlocked || main.TestStatus.Contains("无法释放") || main.TestStatus.Contains("禁止"));
+
+        // Release gate and verify cleanup recovery
+        uncoopAsr.Release.TrySetResult();
+        try { await main.TestStopCaptureAsync(); } catch { }
+        await Idle(main);
+        check("releasing uncooperative ASR gate recovers pipeline ready state", !main.TestPipelineCleanupFailed && !main.TestRunning);
+        check("uncooperative ASR session disposed exactly once", uncoopAsr.Disposals == 1);
+
         // 5. 100 fast start/stop/switch cycles without unobserved exceptions or duplicate captures
         main.TestPipelineFactory = (settings, store) =>
             new CaptionPipeline(new FixtureAudio(), new FixtureAsr(), new DelayedFixtureTranslator(10, "ok"), settings, store);
@@ -614,6 +646,19 @@ internal static class Phase4DesktopSmoke
                 throw new IOException("Simulated device lock failure during disposal");
             return ValueTask.CompletedTask;
         }
+    }
+
+    sealed class UncooperativeSendAsr : IAsrProvider, IAsrSession
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Disposals;
+        public IAsrSession CreateSession(AsrConfiguration config) => this;
+        public Task ConnectAsync(CancellationToken token) => Task.CompletedTask;
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) { Entered.TrySetResult(); return Release.Task; }
+        public async IAsyncEnumerable<AsrResult> GetResultsAsync([EnumeratorCancellation] CancellationToken token) { await Task.Delay(Timeout.Infinite, token); yield break; }
+        public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+        public ValueTask DisposeAsync() { Interlocked.Increment(ref Disposals); return ValueTask.CompletedTask; }
     }
 }
 

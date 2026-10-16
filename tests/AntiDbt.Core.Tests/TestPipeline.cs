@@ -115,3 +115,30 @@ sealed class FatalErrorAsr(ProviderErrorKind kind) : IAsrProvider
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
+
+sealed class UncooperativeSendAsr : IAsrProvider, IAsrSession
+{
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int Disposals;
+    public IAsrSession CreateSession(AsrConfiguration config) => this;
+    public Task ConnectAsync(CancellationToken token) => Task.CompletedTask;
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) { Entered.TrySetResult(); return Release.Task; }
+    public async IAsyncEnumerable<AsrResult> GetResultsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token) { await Task.Delay(Timeout.Infinite, token); yield break; }
+    public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+    public ValueTask DisposeAsync() { Interlocked.Increment(ref Disposals); return ValueTask.CompletedTask; }
+}
+
+sealed class UncooperativeConnectAsr : IAsrProvider, IAsrSession
+{
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int Disposals;
+    public IAsrSession CreateSession(AsrConfiguration config) => this;
+    public Task ConnectAsync(CancellationToken token) { Entered.TrySetResult(); return Release.Task; }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) => Task.CompletedTask;
+    public async IAsyncEnumerable<AsrResult> GetResultsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token) { await Task.Delay(Timeout.Infinite, token); yield break; }
+    public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+    public ValueTask DisposeAsync() { Interlocked.Increment(ref Disposals); return ValueTask.CompletedTask; }
+}
+
