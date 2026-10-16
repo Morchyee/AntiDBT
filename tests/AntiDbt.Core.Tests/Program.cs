@@ -711,6 +711,114 @@ Test("subtitle store dynamic MaxHistory truncates history and preserves session"
     Check(store.CurrentSession == session, "session isolation must be preserved after MaxHistory change");
 });
 
+Test("semantic revision matrix prevents provisional draft retain on value or semantic reversal", () => {
+    var pairs = new[]
+    {
+        ("negation", "I really do want to go there today.", "I really do not want to go there today.", false),
+        ("number", "There are 5 apples on the table", "There are 6 apples on the table", false),
+        ("entity", "John called me yesterday afternoon", "Jack called me yesterday afternoon", false),
+        ("direction", "Turn left at the next street", "Turn right at the next street", false),
+        ("units", "The station is 10 km away", "The station is 10 miles away", false),
+        ("deletion", "I can hardly wait for tomorrow", "I can wait for tomorrow", false),
+        ("insertion", "We will leave today", "We will probably leave today", false),
+        ("ordinary_prefix", "Hello world", "Hello world this is a test", true),
+        ("decimal_extension", "The dose is 5", "The dose is 5.5 mg", false),
+        ("digit_group_extension", "There are 1", "There are 1,000 people", false)
+    };
+    foreach (var pair in pairs)
+    {
+        var s = new SubtitleStore();
+        var g = s.BeginSession();
+        s.ApplySource(g, Speech(pair.Item2, revision: 1, id: "x", final: true));
+        s.ApplyTranslation(g, "x", 1, "OLD_TRANSLATION");
+        s.ApplySource(g, Speech(pair.Item3, revision: 2, id: "x", final: true));
+        var shown = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
+        bool actualRetain = shown.Length > 0;
+        Check(actualRetain == pair.Item4, $"semantic test '{pair.Item1}': expected retain={pair.Item4}, actual={actualRetain} (before='{pair.Item2}', after='{pair.Item3}')");
+    }
+});
+
+await TestAsync("five second provisional preview expiry clears unconfirmed translation", async () => {
+    var s = new SubtitleStore();
+    var g = s.BeginSession();
+    s.ApplySource(g, Speech("Hello", revision: 1, id: "ttl", final: false));
+    s.ApplyTranslation(g, "ttl", 1, "OLD");
+    s.ApplySource(g, Speech("Hello world", revision: 2, id: "ttl", final: false));
+    var before = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
+    Check(before == "OLD", "expected provisional translation before expiry");
+    await Task.Delay(5200);
+    var afterIdle = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
+    Check(afterIdle == "", $"provisional translation should expire after 5 seconds idle, got '{afterIdle}'");
+    s.ApplySource(g, Speech("Hello world today", revision: 3, id: "ttl", final: false));
+    var afterFurther = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
+    Check(afterFurther == "", $"provisional translation should not be retained after expiry, got '{afterFurther}'");
+});
+
+await TestAsync("HTTP 429 Retry-After blocks manual retry during cooldown", async () => {
+    int calls = 0;
+    var translator = new BarrierTranslator((req, token) => {
+        calls++;
+        throw new ProviderException(ProviderErrorKind.RateLimited, "controlled rate limit", TimeSpan.FromSeconds(120));
+    });
+    var audio = new TestAudioSource();
+    var asr = new TestAsrProvider();
+    await using var p = new CaptionPipeline(audio, asr, translator, new() { Translation = new() { DebounceMilliseconds = 0 } });
+    await p.StartAsync();
+    audio.Push();
+    for (int i = 0; i < 100 && !p.Store.Snapshot().Any(x => x.TranslationError != null); i++)
+        await Task.Delay(20);
+    Check(calls == 1, $"expected 1 initial call, got {calls}");
+    var row = p.Store.Snapshot().Single();
+    bool accepted = p.RetryTranslation(row.SessionId, row.SegmentId, row.Revision);
+    Check(!accepted, "RetryTranslation must be rejected when provider is under active RateLimited cooldown");
+    await Task.Delay(50);
+    Check(calls == 1, $"no second HTTP request should be sent during cooldown, calls={calls}");
+    await p.StopAsync();
+});
+
+await TestAsync("terminal HTTP errors (401/402) block manual retry without configuration change", async () => {
+    foreach (var kind in new[] { ProviderErrorKind.Authentication, ProviderErrorKind.Quota })
+    {
+        int calls = 0;
+        var translator = new BarrierTranslator((req, token) => {
+            calls++;
+            throw new ProviderException(kind, $"controlled terminal error: {kind}");
+        });
+        var audio = new TestAudioSource();
+        var asr = new TestAsrProvider();
+        await using var p = new CaptionPipeline(audio, asr, translator, new() { Translation = new() { DebounceMilliseconds = 0 } });
+        await p.StartAsync();
+        audio.Push();
+        for (int i = 0; i < 100 && !p.Store.Snapshot().Any(x => x.TranslationError != null); i++)
+            await Task.Delay(20);
+        Check(calls == 1, $"expected 1 initial call for {kind}, got {calls}");
+        var row = p.Store.Snapshot().Single();
+        bool accepted = p.RetryTranslation(row.SessionId, row.SegmentId, row.Revision);
+        Check(!accepted, $"RetryTranslation must be rejected for terminal error {kind} without config change");
+        await Task.Delay(50);
+        Check(calls == 1, $"calls must remain 1 without config change for {kind}");
+        await p.StopAsync();
+    }
+});
+
+await TestAsync("telemetry TotalPipelineMs anchors to audio capture and records stop cancellation", async () => {
+    var audio = new TestAudioSource();
+    var asr = new TestAsrProvider();
+    var blocking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var translator = new BarrierTranslator(async (req, token) => {
+        blocking.TrySetResult();
+        await Task.Delay(Timeout.Infinite, token);
+        return "never";
+    });
+    await using var p = new CaptionPipeline(audio, asr, translator, new() { Translation = new() { DebounceMilliseconds = 0 } });
+    await p.StartAsync();
+    audio.Push();
+    await blocking.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    await p.StopAsync(StopReason.Reconfigure);
+    var records = p.Telemetry.Snapshot();
+    Check(records.Any(r => r.Outcome == TelemetryOutcome.Cancelled), "StopAsync must record Cancelled telemetry record");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

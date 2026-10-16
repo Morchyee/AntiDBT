@@ -327,9 +327,9 @@ public sealed class CaptionPipeline : IAsyncDisposable
                         asrMs = elapsed.TotalMilliseconds;
                     }
                 }
-                if (asrMs.HasValue || queueWaitMs.HasValue)
+                if (asrMs.HasValue || queueWaitMs.HasValue || audioEnd.HasValue)
                 {
-                    segment = segment with { AsrLatencyMs = asrMs, QueueWaitMs = queueWaitMs };
+                    segment = segment with { AsrLatencyMs = asrMs, QueueWaitMs = queueWaitMs, AudioCapturedTimestamp = audioEnd };
                 }
                 _translations.Schedule(segment);
             }
@@ -340,6 +340,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
             throw;
         }
     }
+    public void ResetTranslationErrors() => _translations.ResetTerminalError();
     public bool RetryTranslation(long session, string segmentId, int revision)
     {
         if (session != Store.CurrentSession)
@@ -370,6 +371,20 @@ public sealed class CaptionPipeline : IAsyncDisposable
         // Normal successful rows or rows without error cannot be retried
         if (target.TranslationText.Length > 0 || string.IsNullOrEmpty(target.TranslationError))
             return false;
+
+        // Check provider rate limit cooldown
+        if (_translations.IsRateLimited(out var remaining))
+        {
+            Publish(PipelineState.Listening, $"翻译服务限流中，请等待冷却时间结束（剩余 {Math.Ceiling(remaining.TotalSeconds)} 秒）");
+            return false;
+        }
+
+        // Check provider terminal errors
+        if (_translations.HasTerminalError(out var terminalKind))
+        {
+            Publish(PipelineState.Listening, $"翻译服务配置异常 ({terminalKind})，请先修改配置或凭据后再试");
+            return false;
+        }
 
         // Cooldown check (2 seconds per segment)
         string cooldownKey = $"{session}:{segmentId}";
@@ -419,13 +434,17 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 _lifetime.Cancel();
                 _translations.CancelPending();
                 if (reason == StopReason.Reconfigure)
+                {
+                    _translations.ResetTerminalError();
                     Store.BeginSession(false);
+                }
                 using var quickDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
                 quickDeadline.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
                     await _audio.StopAsync(quickDeadline.Token);
                     await Completion.WaitAsync(quickDeadline.Token);
+                    try { await _translations.FlushAsync(quickDeadline.Token); } catch { }
                     _stopCompleted = true;
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested)
@@ -460,6 +479,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 }
             }
             _translations.CancelPending();
+            try { await _translations.FlushAsync(deadline.Token); } catch { }
             Store.BeginSession(false);
         }
         finally { _stopGate.Release(); }

@@ -16,6 +16,47 @@ public sealed class TranslationScheduler : IAsyncDisposable
     readonly PipelineTelemetryCollector? telemetry;
     bool disposed;
     int outstandingRequests;
+    long _rateLimitCooldownUntilTimestamp;
+    ProviderErrorKind? _terminalErrorKind;
+
+    public bool IsRateLimited(out TimeSpan remaining)
+    {
+        long now = Stopwatch.GetTimestamp();
+        long until = Interlocked.Read(ref _rateLimitCooldownUntilTimestamp);
+        if (now < until)
+        {
+            remaining = TimeSpan.FromSeconds((double)(until - now) / Stopwatch.Frequency);
+            return true;
+        }
+        remaining = TimeSpan.Zero;
+        return false;
+    }
+
+    public bool HasTerminalError(out ProviderErrorKind? errorKind)
+    {
+        errorKind = _terminalErrorKind;
+        return errorKind is not null;
+    }
+
+    public void ResetTerminalError()
+    {
+        _terminalErrorKind = null;
+    }
+
+    private static double? ComputeTotalPipelineMs(CaptionSegment segment)
+    {
+        if (segment.AudioCapturedTimestamp.HasValue)
+        {
+            var elapsed = Stopwatch.GetElapsedTime(segment.AudioCapturedTimestamp.Value).TotalMilliseconds;
+            return elapsed >= 0 ? elapsed : null;
+        }
+        if (segment.ReceivedTimestamp > 0)
+        {
+            return (segment.QueueWaitMs ?? 0) + (segment.AsrLatencyMs ?? 0) + Stopwatch.GetElapsedTime(segment.ReceivedTimestamp).TotalMilliseconds;
+        }
+        return null;
+    }
+
     public LatencyMonitor RequestLatency { get; } = new();
     public event Action<string>? Error;
     public TranslationScheduler(SubtitleStore store, ITranslationProvider provider, TranslationConfiguration settings, string target, PipelineTelemetryCollector? telemetry = null)
@@ -85,6 +126,46 @@ public sealed class TranslationScheduler : IAsyncDisposable
                             attempt.Token.ThrowIfCancellationRequested();
                             segment = job.Latest;
                         }
+                        if (_terminalErrorKind is { } terminalKind)
+                        {
+                            telemetry?.Record(new SegmentTelemetryRecord
+                            {
+                                SessionId = segment.SessionId,
+                                SegmentId = segment.SegmentId,
+                                Revision = segment.Revision,
+                                IsFinal = segment.IsFinal,
+                                Language = segment.Language,
+                                QueueWaitMs = segment.QueueWaitMs,
+                                AsrServiceMs = segment.AsrLatencyMs,
+                                Outcome = TelemetryOutcome.Failed,
+                                ErrorKind = terminalKind.ToString()
+                            });
+                            string msg = $"翻译服务配置异常 ({terminalKind})，请检查配置";
+                            if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, msg))
+                                Error?.Invoke(msg);
+                            return;
+                        }
+                        if (IsRateLimited(out var remaining) && remaining > TimeSpan.Zero)
+                        {
+                            if (!segment.IsFinal)
+                                return;
+                            telemetry?.Record(new SegmentTelemetryRecord
+                            {
+                                SessionId = segment.SessionId,
+                                SegmentId = segment.SegmentId,
+                                Revision = segment.Revision,
+                                IsFinal = segment.IsFinal,
+                                Language = segment.Language,
+                                QueueWaitMs = segment.QueueWaitMs,
+                                AsrServiceMs = segment.AsrLatencyMs,
+                                Outcome = TelemetryOutcome.Failed,
+                                ErrorKind = ProviderErrorKind.RateLimited.ToString()
+                            });
+                            string msg = $"翻译服务限流冷却中（剩余 {Math.Ceiling(remaining.TotalSeconds)} 秒）";
+                            if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, msg))
+                                Error?.Invoke(msg);
+                            return;
+                        }
                         var context = store.Snapshot().Where(x => x.SessionId == segment.SessionId && x.IsFinal && x.ReceivedTimestamp < segment.ReceivedTimestamp && x.SegmentId != segment.SegmentId)
                             .TakeLast(Math.Clamp(settings.ContextSentences, 0, 12)).Select(x => x.SourceText).ToArray();
                         var key = segment.Language + "\0" + target + "\0" + segment.SourceText + "\0" + string.Join("\u001f", context);
@@ -104,7 +185,7 @@ public sealed class TranslationScheduler : IAsyncDisposable
                                 AsrServiceMs = segment.AsrLatencyMs,
                                 MtDebounceWaitMs = 0,
                                 MtServiceMs = 0,
-                                TotalPipelineMs = segment.ReceivedTimestamp > 0 ? Stopwatch.GetElapsedTime(segment.ReceivedTimestamp).TotalMilliseconds : null,
+                                TotalPipelineMs = ComputeTotalPipelineMs(segment),
                                 Outcome = TelemetryOutcome.CacheHit
                             });
                         }
@@ -139,7 +220,7 @@ public sealed class TranslationScheduler : IAsyncDisposable
                                 AsrServiceMs = segment.AsrLatencyMs,
                                 MtDebounceWaitMs = segment.IsFinal ? 0 : settings.DebounceMilliseconds,
                                 MtServiceMs = serviceMs,
-                                TotalPipelineMs = segment.ReceivedTimestamp > 0 ? Stopwatch.GetElapsedTime(segment.ReceivedTimestamp).TotalMilliseconds : null,
+                                TotalPipelineMs = ComputeTotalPipelineMs(segment),
                                 Outcome = TelemetryOutcome.Success
                             });
                             attempt.Token.ThrowIfCancellationRequested();
@@ -154,7 +235,7 @@ public sealed class TranslationScheduler : IAsyncDisposable
                         if (!store.ApplyTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text))
                             store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, text);
                     }
-                    catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested)
+                    catch (OperationCanceledException)
                     {
                         telemetry?.Record(new SegmentTelemetryRecord
                         {
@@ -168,25 +249,23 @@ public sealed class TranslationScheduler : IAsyncDisposable
                             Outcome = TelemetryOutcome.Cancelled
                         });
                     }
-                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                    {
-                        telemetry?.Record(new SegmentTelemetryRecord
-                        {
-                            SessionId = segment.SessionId,
-                            SegmentId = segment.SegmentId,
-                            Revision = segment.Revision,
-                            IsFinal = segment.IsFinal,
-                            Language = segment.Language,
-                            QueueWaitMs = segment.QueueWaitMs,
-                            AsrServiceMs = segment.AsrLatencyMs,
-                            Outcome = TelemetryOutcome.Failed,
-                            ErrorKind = "Timeout"
-                        });
-                        if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
-                            Error?.Invoke("翻译请求超时，请检查服务或重试");
-                    }
                     catch (ProviderException error) when (!token.IsCancellationRequested)
                     {
+                        if (error.Kind == ProviderErrorKind.RateLimited)
+                        {
+                            var delay = error.RetryAfter ?? TimeSpan.FromSeconds(5);
+                            long until = Stopwatch.GetTimestamp() + (long)(delay.TotalSeconds * Stopwatch.Frequency);
+                            Interlocked.Exchange(ref _rateLimitCooldownUntilTimestamp, until);
+                        }
+                        else if (error.Kind is ProviderErrorKind.Authentication
+                                 or ProviderErrorKind.Quota
+                                 or ProviderErrorKind.Configuration
+                                 or ProviderErrorKind.UnsupportedLanguage
+                                 or ProviderErrorKind.ModelUnavailable)
+                        {
+                            _terminalErrorKind = error.Kind;
+                        }
+
                         telemetry?.Record(new SegmentTelemetryRecord
                         {
                             SessionId = segment.SessionId,
@@ -199,7 +278,8 @@ public sealed class TranslationScheduler : IAsyncDisposable
                             Outcome = TelemetryOutcome.Failed,
                             ErrorKind = error.Kind.ToString()
                         });
-                        if(store.ApplyTranslationError(segment.SessionId,segment.SegmentId,segment.Revision,error.Message))Error?.Invoke(error.Message);
+                        if (store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, error.Message))
+                            Error?.Invoke(error.Message);
                     }
                     catch (Exception) when (!token.IsCancellationRequested)
                     {
@@ -237,6 +317,17 @@ public sealed class TranslationScheduler : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+            telemetry?.Record(new SegmentTelemetryRecord
+            {
+                SessionId = segment.SessionId,
+                SegmentId = segment.SegmentId,
+                Revision = segment.Revision,
+                IsFinal = segment.IsFinal,
+                Language = segment.Language,
+                QueueWaitMs = segment.QueueWaitMs,
+                AsrServiceMs = segment.AsrLatencyMs,
+                Outcome = TelemetryOutcome.Cancelled
+            });
             if (!token.IsCancellationRequested && store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
                 Error?.Invoke("翻译请求超时，请检查服务或重试");
         }

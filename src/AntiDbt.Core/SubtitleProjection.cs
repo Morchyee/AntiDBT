@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace AntiDbt.Core;
 
 public sealed record SubtitleParagraph(
@@ -79,7 +81,16 @@ public static class SubtitleProjection
         var source = JoinTexts(list.Select(x => x.SourceText));
         var translation = string.IsNullOrWhiteSpace(source)
             ? ""
-            : JoinTexts(list.Select(x => string.IsNullOrWhiteSpace(x.SourceText) ? "" : (x.TranslationText.Length > 0 ? x.TranslationText : x.ProvisionalTranslationText)));
+            : JoinTexts(list.Select(x =>
+            {
+                if (string.IsNullOrWhiteSpace(x.SourceText))
+                    return "";
+                if (x.TranslationText.Length > 0)
+                    return x.TranslationText;
+                if (x.TranslatedTimestamp is not null && Stopwatch.GetElapsedTime(x.TranslatedTimestamp.Value) >= TimeSpan.FromSeconds(5))
+                    return "";
+                return x.ProvisionalTranslationText;
+            }));
 
         return new(
             source,

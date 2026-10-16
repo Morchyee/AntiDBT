@@ -5,7 +5,8 @@ public sealed record CaptionSegment(long SessionId, string SegmentId, int Revisi
     string TranslationText, bool IsFinal, TimeSpan AudioStart, TimeSpan AudioEnd, long ReceivedTimestamp,
     long? TranslatedTimestamp, string Language, string? TranslationError = null,
     string ProvisionalTranslationText = "", int TranslationRevision = 0,
-    double? AsrLatencyMs = null, double? QueueWaitMs = null);
+    double? AsrLatencyMs = null, double? QueueWaitMs = null,
+    long? AudioCapturedTimestamp = null);
 
 public sealed class SubtitleStore
 {
@@ -80,7 +81,6 @@ public sealed class SubtitleStore
                     return null;
 
                 string exactTranslation = old?.SourceText == result.Text ? old.TranslationText : "";
-                long? translatedTimestamp = old?.SourceText == result.Text ? old.TranslatedTimestamp : null;
 
                 // Compatible Draft Rule (F2):
                 // Empty or whitespace source NEVER inherits provisional translation.
@@ -101,11 +101,17 @@ public sealed class SubtitleStore
                     }
                 }
 
+                long? translatedTimestamp = exactTranslation.Length > 0
+                    ? old?.TranslatedTimestamp
+                    : (provisionalTranslation.Length > 0 ? (old?.TranslatedTimestamp ?? old?.ReceivedTimestamp) : null);
+                long? audioCaptured = old?.SourceText == result.Text ? old.AudioCapturedTimestamp : null;
+
                 row = new(session, result.SegmentId, result.Revision, result.Text,
                     exactTranslation, result.IsFinal,
                     result.AudioStart, result.AudioEnd, Stopwatch.GetTimestamp(),
                     translatedTimestamp, result.Language ?? "auto", null,
-                    provisionalTranslation, provisionalRevision);
+                    provisionalTranslation, provisionalRevision,
+                    null, null, audioCaptured);
                 if (index >= 0)
                     _rows[index] = row;
                 else
@@ -263,6 +269,15 @@ public sealed class SubtitleStore
         char lastOldChar = cleanOld[^1];
         if (!char.IsWhiteSpace(nextChar) && !char.IsPunctuation(nextChar) && !IsCjk(nextChar) && !IsCjk(lastOldChar))
             return false;
+
+        // Number token boundary: a digit must not be mutated into a decimal, thousands grouping, range, or fraction
+        if (char.IsDigit(lastOldChar))
+        {
+            if (char.IsDigit(nextChar) || nextChar is '%' or '‰' or '°' or '℃' or '℉')
+                return false;
+            if (char.IsPunctuation(nextChar) && cleanOld.Length + 1 < cleanNew.Length && char.IsDigit(cleanNew[cleanOld.Length + 1]))
+                return false;
+        }
 
         // The newly appended extension must not introduce negation or reversal words
         string extension = cleanNew[cleanOld.Length..];
