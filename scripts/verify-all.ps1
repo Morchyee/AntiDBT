@@ -108,6 +108,10 @@ try {
 
     # 2. Core Unit & Contract Tests
     Run-Suite -Name "Core" -Category "OfflineUnit" -ExePath "tests/AntiDbt.Core.Tests/bin/Debug/net9.0/AntiDbt.Core.Tests.dll" -Arguments @() -LogName "core.log"
+    $coreSample = "tests/AntiDbt.Core.Tests/bin/Debug/net9.0/artifacts/phase5.3/diagnostic-telemetry-sample.json"
+    if (Test-Path -LiteralPath $coreSample) {
+        Copy-Item -LiteralPath $coreSample -Destination (Join-Path $fullArtifactsDir "diagnostic-telemetry-sample.json") -Force
+    }
 
     # 3. Windows Audio & DPAPI Tests
     Run-Suite -Name "Windows" -Category "PlatformWindows" -ExePath "tests/AntiDbt.Windows.Tests/bin/Debug/net9.0-windows/AntiDbt.Windows.Tests.dll" -Arguments @() -LogName "windows.log"

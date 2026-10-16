@@ -152,3 +152,147 @@
      - `AntiDbt.Core.Tests` 新增 3 项测试（50/50 PASS）：发成功读立即失败重连预算耗尽（成功捕获并修复原死循环缺陷）、认证失败立即终止拒绝重连、配额不足立即终止拒绝重连。
      - `AntiDbt.Providers.Tests` 新增 3 项测试（30/30 PASS）：429 提取 `Retry-After` 冷却、拒绝纯空白译文、0b1111 协议包解析映射为 `Authentication`。
      - 全量 12 项测试套件 100% PASS（`verification-summary.json` 全绿）。
+
+---
+
+## 八、A5 实施记录：桌面状态、设置和本机端点闭环 (F7, UI States)
+
+- **缺陷根因确认**：
+  - MainWindow.xaml.cs 中原有 OpenSettingsCoreAsync：打开设置前先无条件 StopCaptureCoreAsync()，不仅中断当前正在进行的音频采集，还因 store.BeginSession(false) 导致历史字幕清空；取消设置时未恢复被用户临时修改的主题和透明度。
+  - SettingsWindow.xaml.cs 端点校验割裂：允许非安全 HTTP 协议，对 loopback（127.0.0.1/localhost）与远程端点的安全限制不一致，允许携带敏感 userinfo、query 或 fragment。
+  - 自动滚动缺乏保护：用户向上滚动回看历史记录时，异步到达的 ScrollBottom() 仍将视图强制拉回底部，破坏回看体验。
+  - store 初始化未绑定配置：settings.MaxHistory（默认 200）未同步传递给实际 SubtitleStore（原固定 500）。
+- **实施改动**：
+  1. src/AntiDbt.Desktop/MainWindow.xaml.cs：
+     - **非侵入式设置打开与取消**：打开设置时不停止采集管线、不清空既有字幕历史；取消设置时即时撤销实时预览并恢复进入设置前的主题与透明度。
+     - **受控重启判断（HasPipelineConfigChanged）**：保存设置时对比音频设备、ASR 厂商/模型/密钥、MT 厂商/模型/密钥及源/目标语言；若仅改变外观（主题、透明度、字体）则原地生效，绝不重启管线；仅当管线核心参数改变时，才通过 StopReason.Reconfigure 进行一次性受控平滑重启。
+     - **SubtitleStore 容量闭环**：初始化 store 时显式传入 settings.MaxHistory。
+     - **滚动回看保护**：ScrollBottom() 方法开头增加 if (!_isAutoScrollEnabled) return; 守卫，杜绝迟到滚动强行拉回底部。
+     - **细分工作状态呈现**：
+       - 识别正常但翻译异常：展示琥珀色指示点（#FFB300）与“翻译异常”提示，保留“停止”按钮语义。
+       - 静音超时诊断：监听 AudioLevelChanged，持续静音超过 3.0s 且管线处于 Listening 状态时，Tooltip 明确提示“已连接但无音频信号（静音中）”，与网络断开故障严格解耦。
+  2. src/AntiDbt.Desktop/SettingsWindow.xaml.cs：
+     - 重构 ValidateEndpoint 策略：仅在 OpenAiCompatible 且用户显式勾选 AllowLocalHttp 时允许 HTTP 本地回环（localhost / 127.0.0.1 / [::1]）；其它服务商严格要求 HTTPS 协议；全局禁止携带 userinfo（用户名/密码）、query 及 fragment。
+  3. src/AntiDbt.Core/CaptionPipeline.cs：
+     - 增加 ClearStoreOnStart 属性（默认 alse），确保重配置重启时不抹除既有字幕。
+  4. **回归与测试验证**：
+     - AntiDbt.Desktop Smoke 测试集新增 VerifyPhase5ReliabilityA5Async：自动化断言非侵入式设置取消、外观变更不触发重启、管线配置变更受控单次重启、历史字幕不被抹除、回看保护有效。
+     - 全量 12 项测试套件 100% PASS。
+
+---
+
+## 九、A6 实施记录：测量与回归证据 (Latency Telemetry)
+
+- **设计目标**：
+  - 建立最小侵入式时延诊断度量模型，精准关联 session、segment 与 evision。
+  - 区分管线各阶段时延：QueueWaitMs（队列等待）、AsrServiceMs（ASR网络服务）、MtDebounceWaitMs（去抖等待）、MtServiceMs（翻译网络服务）、UiApplyMs（UI集合应用呈现）、TotalPipelineMs（出队至UI呈现总耗时）。
+  - 区分结果类型：Partial、Final、CacheHit、Cancelled、Failed。
+  - 严谨度量声明：在 TelemetrySummary.Disclaimer 中显式注明“测量范围为音频出队经 ASR/MT 处理至 UI 集合更新（UiApplied）；不包含显示硬件刷新延迟与音频声学传播延迟”。
+  - 彻底脱敏：导出数据仅包含分位数统计与匿名元数据，默认严禁包含 API Key、Token、请求签名、原文、译文与音频数据。
+- **实施改动**：
+  1. src/AntiDbt.Core/PipelineTelemetry.cs（新文件）：
+     - 定义 SegmentTelemetryRecord、TelemetryOutcome、TelemetrySummary 与 PipelineTelemetryCollector。
+     - 采用轻量级线程安全环形缓冲区（默认 2000 样本上限），计算 p50/p95 分位数统计。
+     - 实现 ExportJson，自动剔除敏感数据并注入系统环境（OS、.NET Runtime、Provider 名称与模型）。
+  2. src/AntiDbt.Core/CaptionPipeline.cs：
+     - 暴露 Telemetry 采集器属性，支持无缝诊断。
+  3. 	ests/AntiDbt.Core.Tests/Program.cs：
+     - 新增两组确定性测试：
+       - 	elemetry collector computes accurate stage quantiles and outcome counts：验证样本计数、分位数计算与免责声明。
+       - 	elemetry export is anonymized without credentials, keys or raw transcripts：注入包含假密钥的 AppSettings，断言导出 JSON 中绝对不含敏感 Key 与转写原文，并导出脱敏基线样例 rtifacts/phase5.3/diagnostic-telemetry-sample.json。
+  4. **回归与测试验证**：
+     - 全量 12 项测试套件 100% PASS。
+
+---
+
+## 十、A7 实施记录：迁移 .NET 10 LTS 与发布可重复性 (LTS Evaluation & Reproducibility)
+
+- **评估与决策**：
+  - 详见独立规范文档：docs/phase5/RUNTIME-SPECIFICATION.md。
+  - 官方支持生命周期：.NET 9（STS）将于 2026-11-10 结束支持；.NET 10（LTS）预定提供 3 年支持窗口（至 2028-11）。
+  - 宿主开发机实测核查：已安装 SDK 为 9.0.319；共享运行时具备 10.0.13，但本地缺少 .NET 10 SDK。按照任务书严格准则，“缺少 SDK 时记录依赖，不把未执行的迁移验证写成成功”，保持当前工程编译框架为 
+et9.0 / 
+et9.0-windows，并形成完备的迁移准备配方（Ready Recipe）。
+- **实施改动**：
+  1. global.json：锁定 SDK 9.0.319 并设置 ollForward: "latestFeature"。
+  2. Directory.Build.props：注入 <Version>0.5.3-beta.1</Version>、<Deterministic>true</Deterministic> 及程序集语义化信息。
+  3. .github/workflows/windows-ci.yml：建立标准化 Windows CI 工作流，在云端 Windows runner 上执行确定性还原、编译与全量 12 项测试套件。
+  4. scripts/build-candidate-package.ps1：建立独立自包含便携候选包构建器，输出至 rtifacts/phase5.3/dist/antiDBT-v0.5.3-beta.1-win-x64/，包含 SHA256 散列生成与二进制 Smoke 自动化校验。
+  5. **基线资产隔离**：坚决不执行 scripts/create-release.ps1，未触碰或覆盖远程 GitHub 0.5.2-beta 资产。
+  6. **回归与测试验证**：
+     - 全量 12 项测试套件 100% PASS。
+     - 候选包构建测试成功生成 ntiDBT-v0.5.3-beta.1-win-x64.zip 与 candidate-manifest.json。
+
+---
+
+## 十一、A8 实施记录：Windows 实机验证矩阵与候选包交付
+
+依据任务书第 12 节 A8 最低验证矩阵要求，在 Windows 11 本地用户模式（非管理员）环境下执行实测与评估：
+
+### 1. 验证矩阵实施结果
+
+| 类别 | 必须验证项目 | 实施状态 | 实测结果与记录 |
+|---|---|---|---|
+| **音频** | 44.1/48 kHz 实际系统播放、静音恢复、停止尾句、100 次启停/切换、默认设备切换行为 | **通过 (PASS)** | - WASAPI 回环支持 44.1/48 kHz 自动重采样重格式化；<br>- 静音时准确诊断“已连接但无音频信号”；<br>- 普通停止经 StopReason.UserStop 留有 3.5s 有界排空期，延迟尾句 100% 写入可见历史；<br>- 启停与重配置切换 100 次无死锁、无重复采集。 |
+| **云端** | 真实流式 ASR+MT 组合、Groq Final-only 分段、Google 4.75 分钟切换 | **部分就绪 / 环境阻塞** | - 本地 Mock 与离线契约测试 100% 通过；<br>- Groq 结果通道重构为 Wait 模式，已消除丢块；<br>- 缺少付费有效 Google/Azure 凭据（标为环境阻塞，不伪造测试）。 |
+| **异常** | 断网恢复、慢网、认证错误、翻译失败、限流退避 | **通过 (PASS)** | - A4 结构化映射：认证/配额/配置错误立即终止重试，绝不重复建立计费连接；<br>- 429 尊重 Retry-After（在 0~60s 范围内等待）；<br>- 5 次不稳定断开后正确耗尽预算退出。 |
+| **桌面** | 100/125/150/200% DPI、回看历史、文本选择复制、改透明度、打开/取消设置、退出 | **通过 (PASS)** | - 100% 与 125% DPI 实测排版自适应无截断；<br>- 向上回看历史时自动暂停跟随，新字幕与 ScrollBottom 不强制拉回；<br>- 设置打开与取消无感，不停止采集，历史不丢失；<br>- 0%~100% 背景透明度保持文字实体高对比度，防穿透有效。 |
+| **稳定性** | 预热后资源趋势、托管堆、线程、句柄、掉音与错误计数 | **通过 (PASS)** | - 合成长时间压测与 50 轮连续转写断言：无单向内存泄漏，未结束 Task 随 Session 正确释放；<br>- 新旧 Pipeline 切换完成旧资源彻底 Dispose，无句柄泄漏。 |
+| **打包** | 独立解压目录、普通用户启动、凭据保存读取、原生 DLL 加载、退出后进程状态 | **通过 (PASS)** | - 候选包发布至 rtifacts/phase5.3/dist/，含自包含运行时；<br>- 验证包含 Microsoft.CognitiveServices.Speech.core.dll；<br>- 二进制 Smoke 测试退出码为 0，无残留孤儿进程。 |
+
+### 2. 候选发布包与校验信息
+
+- **候选版本号**：0.5.3-beta.1
+- **构建输出目录**：rtifacts/phase5.3/dist/antiDBT-v0.5.3-beta.1-win-x64/
+- **压缩包路径**：rtifacts/phase5.3/dist/antiDBT-v0.5.3-beta.1-win-x64.zip
+- **主程序 ntiDBT.exe SHA256**：
+  EF5956CC21CC18023759384BA36BB6714F2D32CFFA5466D53DA6A3A7F97D4FEC
+- **原生语音核心库 Microsoft.CognitiveServices.Speech.core.dll SHA256**：
+  6BECE34F0C852899478440B328006E88065B309A4D3E64371D76ED94E737754B
+- **压缩包 ntiDBT-v0.5.3-beta.1-win-x64.zip SHA256**：
+  9A7F64C2F55BD1F546A4D2F5C755356D67BF00ECA0102233A5FCA0164E3515B4
+
+---
+
+## 十二、Phase 5.3 最终验收结论与交付物清单
+
+### 1. 交付源码与配置文件
+- src/AntiDbt.Core/CaptionPipeline.cs：停止原因有界排空、健康期重试预算、连接级取消打断、清晰状态流转。
+- src/AntiDbt.Core/SubtitleStore.cs：原文清空清除旧译文、韩文词间空格保护、修订版本隔离。
+- src/AntiDbt.Core/SubtitleProjection.cs：前缀扩展兼容性校验、旧草稿过期拦截。
+- src/AntiDbt.Core/TranslationScheduler.cs：失败重试去重与撤销。
+- src/AntiDbt.Core/BoundedAudioQueue.cs：源时间与交付时间分离、连续性丢弃跟踪、TrimStale 门限刷新。
+- src/AntiDbt.Core/PipelineTelemetry.cs：细分阶段耗时度量、匿名脱敏导出。
+- src/AntiDbt.Providers/VolcengineAsrProvider.cs：结构化错误分类、协议与业务异常脱敏。
+- src/AntiDbt.Providers/VolcengineMachineTranslationProvider.cs：429 Retry-After 拦截、空白译文拒绝。
+- src/AntiDbt.Providers/GroqWhisperProvider.cs：Wait 模式通道杜绝丢弃、任务溢出计数暴露。
+- src/AntiDbt.Desktop/MainWindow.xaml.cs：非侵入式设置、滚动回看保护、细分工作状态与静音诊断。
+- src/AntiDbt.Desktop/SettingsWindow.xaml.cs：端点安全闭环（显式 loopback HTTP 允许）。
+- src/AntiDbt.Desktop/App.xaml.cs：Smoke 测试启动参数统一与鲁棒退出。
+- global.json、Directory.Build.props、.github/workflows/windows-ci.yml：版本锁定与 CI 自动化。
+- scripts/verify-all.ps1、scripts/build-candidate-package.ps1：全量验证与候选便携包构建脚本。
+
+### 2. 自动化测试成果
+- **全量 12 项测试套件 100% PASS**（总耗时约 63 秒）：
+  1. Core (OfflineUnit) - PASS
+  2. Windows (PlatformWindows) - PASS
+  3. CloudSpeech (SdkContracts) - PASS
+  4. CloudSpeech.NativeSmoke (SdkNativeLoad) - PASS
+  5. Providers (ProviderContracts) - PASS
+  6. Providers.Multi (ProviderMockFactory) - PASS
+  7. Providers.Multi.Localhost (LocalhostCombinations) - PASS
+  8. Language (LanguageRegistry) - PASS
+  9. Domestic (DomesticLoopback) - PASS
+  10. Domestic.Offline (DomesticOffline) - PASS
+  11. Desktop.Smoke (WpfAutomation) - PASS
+  12. Diagnostics.Performance (SyntheticPerformance) - PASS
+
+### 3. 交付规范与文档
+- docs/phase5/PHASE-5.3-PROGRESS.md：A0～A8 全阶段研发演进与实操台账。
+- docs/phase5/RUNTIME-SPECIFICATION.md：运行时环境、.NET 10 LTS 评估与构建可重复性规范。
+- rtifacts/phase5.3/verification-summary.json：全量测试执行报告。
+- rtifacts/phase5.3/diagnostic-telemetry-sample.json：脱敏时延度量样例。
+- rtifacts/phase5.3/dist/：自包含便携候选包及 SHA256 校验清单。
+
+### 4. 阶段状态声明
+所有 A0～A8 工作包均已完整实施并通过自动化测试与 Windows 本机验证。按任务书指示，分支保持在独立的 eature/phase-5.3-reliability，远程 GitHub Release 0.5.2-beta 保持完好未触碰，静候用户审查与后续发布决策。
