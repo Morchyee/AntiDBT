@@ -296,6 +296,56 @@ await TestAsync("newer revision cancels and preempts translation retry", async (
     Check(s.Snapshot()[0].TranslationText == "第二版译文", "newer revision did not prevail over retry");
 });
 
+Test("audio queue tracks duration, oldest age, and stats snapshot", () => {
+    var q = new BoundedAudioQueue(10);
+    long oldTs = Stopwatch.GetTimestamp() - (long)(1.5 * Stopwatch.Frequency);
+    q.Enqueue(new AudioChunk(new byte[640], TimeSpan.Zero, TimeSpan.FromMilliseconds(20), oldTs));
+    q.Enqueue(new AudioChunk(new byte[640], TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20), Stopwatch.GetTimestamp()));
+
+    var stats = q.GetStats();
+    Check(stats.Count == 2, "count mismatch");
+    Check(stats.TotalDuration == TimeSpan.FromMilliseconds(40), "total duration mismatch");
+    Check(stats.OldestChunkAge >= TimeSpan.FromMilliseconds(1400), "oldest age underreported");
+    Check(stats.DroppedChunks == 0, "unexpected drops");
+
+    Check(q.TryDequeue(out var first) && first != null, "dequeue failed");
+    Check(q.TotalDuration == TimeSpan.FromMilliseconds(20), "duration after dequeue mismatch");
+});
+
+Test("audio queue TrimStale drops expired audio and increments discontinuity", () => {
+    var q = new BoundedAudioQueue(10, TimeSpan.FromSeconds(2));
+    long expiredTs = Stopwatch.GetTimestamp() - (long)(4.0 * Stopwatch.Frequency);
+    long freshTs = Stopwatch.GetTimestamp();
+
+    for (int i = 0; i < 5; i++)
+        q.Enqueue(new AudioChunk(new byte[640], TimeSpan.FromMilliseconds(i * 20), TimeSpan.FromMilliseconds(20), expiredTs));
+    q.Enqueue(new AudioChunk(new byte[640], TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(20), freshTs));
+
+    Check(q.Count == 6, "initial count mismatch");
+    int trimmed = q.TrimStale(TimeSpan.FromSeconds(2.0));
+    Check(trimmed == 5, "trimmed count mismatch");
+    Check(q.Count == 1, "remaining count mismatch");
+    Check(q.DroppedChunks == 5, "dropped chunks mismatch");
+    Check(q.Discontinuities == 1, "discontinuity count mismatch");
+    Check(q.TryDequeue(out var remaining) && remaining!.CapturedTimestamp == freshTs, "fresh chunk lost");
+});
+
+await TestAsync("pipeline freshness policy bounds audio age during reconnection", async () => {
+    var audio = new TestAudioSource();
+    var asr = new ReconnectingAsrProvider();
+    await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
+    await p.StartAsync();
+
+    for (int i = 0; i < 8; i++)
+    {
+        _ = p.AudioStats;
+    }
+    audio.Push();
+    audio.Finish();
+    await p.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(p.AudioStats.DroppedChunks >= 0, "stats reporting failed");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

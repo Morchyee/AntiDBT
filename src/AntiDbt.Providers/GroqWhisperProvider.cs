@@ -17,10 +17,12 @@ public sealed class GroqWhisperProvider(HttpClient? testClient = null) : IAsrPro
     {
         readonly AsrConfiguration config;readonly ProviderHttp http;readonly Uri endpoint;
         readonly Channel<Job> jobs=Channel.CreateBounded<Job>(new BoundedChannelOptions(4){FullMode=BoundedChannelFullMode.DropOldest,SingleReader=true});
-        readonly Channel<AsrResult> results=Channel.CreateBounded<AsrResult>(new BoundedChannelOptions(256){FullMode=BoundedChannelFullMode.DropOldest,SingleReader=true});
+        readonly Channel<AsrResult> results=Channel.CreateBounded<AsrResult>(new BoundedChannelOptions(256){FullMode=BoundedChannelFullMode.Wait,SingleReader=true});
         readonly CancellationTokenSource stop=new();readonly object gate=new();
         readonly List<byte[]> active=[];readonly Queue<byte[]> pre=[];byte[] remainder=[];
         Task worker=Task.CompletedTask;long frame,id;int silence,voiced,newFrames;double activeStart;bool overlap,started,completed,disposed;
+        long droppedJobs;
+        public long DroppedJobs => Interlocked.Read(ref droppedJobs);
         readonly int minimum,maximum,silenceLimit,overlapFrames;readonly double threshold;
         string previousText="";long previousJob;
         public Session(AsrConfiguration config,ProviderHttp http,bool testClient)
@@ -64,9 +66,13 @@ public sealed class GroqWhisperProvider(HttpClient? testClient = null) : IAsrPro
         }
         void Emit(bool continuation)
         {
-            if(newFrames>0&&voiced>=15)
-                jobs.Writer.TryWrite(new(active.SelectMany(x=>x).ToArray(),activeStart,frame*.01,overlap,++id));
-            var tail=continuation&&overlapFrames>0?active.TakeLast(overlapFrames).ToArray():[];
+            if (newFrames > 0 && voiced >= 15)
+            {
+                var job = new Job(active.SelectMany(x => x).ToArray(), activeStart, frame * .01, overlap, ++id);
+                if (!jobs.Writer.TryWrite(job))
+                    Interlocked.Increment(ref droppedJobs);
+            }
+            var tail = continuation && overlapFrames > 0 ? active.TakeLast(overlapFrames).ToArray() : [];
             active.Clear();active.AddRange(tail);activeStart=(frame-tail.Length)*.01;overlap=tail.Length>0;newFrames=0;voiced=0;silence=0;
         }
         async Task PumpAsync(CancellationToken token)

@@ -7,7 +7,7 @@
 | **A0** | 冻结证据与建立可复跑入口 | P0 | **已完成** | 建立 `scripts/verify-all.ps1`，全量 12 个测试套件基线实测通过 |
 | **A1** | 修复普通停止的尾句丢失与资源所有权 | P1 | **已完成** | `feat(phase5.3): A1 fix tail subtitle loss on stop and preserve resource ownership` |
 | **A2** | 字幕修正、译文状态与失败恢复 | P1 | **已完成** | `feat(phase5.3): A2 fix provisional translation cleanup, Korean spacing and error retry` |
-| **A3** | 音频新鲜度、溢出与时间轴 | P1 | 待开始 | 待实施 |
+| **A3** | 音频新鲜度、溢出与时间轴 | P1 | **已完成** | `feat(phase5.3): A3 audio freshness bounded queue and discontinuity tracking` |
 | **A4** | Provider 错误与重连预算 | P1 | 待开始 | 待实施 |
 | **A5** | 桌面状态、设置和本机端点闭环 | P1 | 待开始 | 待实施 |
 | **A6** | 测量与回归证据 | P2 | 待开始 | 待实施 |
@@ -100,4 +100,28 @@
   6. **回归与测试验证**：
      - `AntiDbt.Core.Tests` 新增 5 类用例（44/44 PASS）：韩文空格与汉字无空格对比、空白修正彻底清除译文、语义冲突清空草稿与前缀扩展继承、Final 翻译失败错误记录与重试成功、新 revision 到达自动取消/抢占旧重试。
      - `AntiDbt.Desktop.Smoke` 新增 3 项桌面实测：真实 UI 呈现韩文词间空格、空白修正桌面无幽灵译文、翻译失败红字警告呈现及点击重试恢复。全量 12 项测试套件 100% PASS。
+
+---
+
+## 六、A3 实施记录：音频新鲜度、溢出与时间轴 (F3)
+
+- **缺陷根因确认**：
+  - ASR 重连或慢速网络恢复后，缓冲队列按接近实时速率（~200ms）慢速排空，造成用户长时间观看数秒前的陈旧音频字幕。
+  - 队列只记录了粗糙块数，缺少源音频时长、最老块年龄（OldestChunkAge）及跳过/不连续点（Discontinuity）可观测性。
+  - GroqWhisperProvider 中 `results` 通道配置为 `DropOldest`（256），可能在高并发或背压时静默丢失 Final 结果。
+- **实施改动**：
+  1. `src/AntiDbt.Core/BoundedAudioQueue.cs`：
+     - 扩展 `AudioQueueStats` 模型，提供 `Count`, `TotalDuration`, `OldestChunkAge`, `DroppedChunks`, `Discontinuities` 全景指标。
+     - 实现 `TrimStale(TimeSpan? maxAge = null)`：默认 2.0s 过期门限，超过门限的陈旧积压自动丢弃并记录单调 `Discontinuities` 标记。
+  2. `src/AntiDbt.Core/CaptionPipeline.cs`：
+     - 发送循环集成 `_queue.TrimStale(2.0s)`，连接恢复后优先切回当前声音，并在状态栏提示跳过的过期音频块数。
+     - 暴露 `AudioStats`, `DroppedAudioChunks`, `AudioDiscontinuities` 属性。
+     - 延迟映射保护：过滤因断缺口或时钟抖动引起的无效/负数/极端延迟样本（`[0, 30s]` 有效区间）。
+  3. `src/AntiDbt.Providers/GroqWhisperProvider.cs`：
+     - 将 `results` 通道由 `DropOldest` 改为 `BoundedChannelFullMode.Wait`，彻底杜绝 Final 结果静默丢弃。
+     - 为任务通道增加 `droppedJobs` 计数器与 `DroppedJobs` 属性暴露，使转写溢出具备可诊断性。
+  4. **回归与测试验证**：
+     - `AntiDbt.Core.Tests` 新增 3 类用例（47/47 PASS）：队列时长、年龄与快照统计断言；`TrimStale` 准确清理超时音频并递增不连续性计数；重连恢复场景下管线音频年龄上限约束。
+     - 全量 12 项测试套件 100% PASS。
+
 

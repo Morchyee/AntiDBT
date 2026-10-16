@@ -19,6 +19,9 @@ public sealed class CaptionPipeline : IAsyncDisposable
     }
     public LatencyMonitor AsrLatency { get; } = new();
     public LatencyMonitor TranslationLatency => _translations.RequestLatency;
+    public AudioQueueStats AudioStats => _queue.GetStats();
+    public long DroppedAudioChunks => _queue.DroppedChunks;
+    public long AudioDiscontinuities => _queue.Discontinuities;
     public event Action<PipelineStatus>? StatusChanged;
     public event Action<double>? AudioLevelChanged;
     public Task Completion { get; private set; } = Task.CompletedTask;
@@ -106,6 +109,10 @@ public sealed class CaptionPipeline : IAsyncDisposable
                             await reader;
                             throw new IOException("Recognition stream ended unexpectedly.");
                         }
+                        int trimmed = _queue.TrimStale(TimeSpan.FromSeconds(2.0));
+                        if (trimmed > 0)
+                            Publish(PipelineState.Listening, $"正在聆听系统音频（跳过 {trimmed} 块过期积压）");
+
                         AudioChunk? chunk = null;
                         if (!_queue.TryDequeue(out chunk))
                         {
@@ -227,7 +234,11 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     audioEnd = match.Timestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
             }
             if (audioEnd is { } timestamp)
-                AsrLatency.Record(Stopwatch.GetElapsedTime(timestamp));
+            {
+                var elapsed = Stopwatch.GetElapsedTime(timestamp);
+                if (elapsed >= TimeSpan.Zero && elapsed <= TimeSpan.FromSeconds(30))
+                    AsrLatency.Record(elapsed);
+            }
             _translations.Schedule(segment);
         }
     }
