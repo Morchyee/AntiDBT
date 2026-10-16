@@ -346,6 +346,80 @@ await TestAsync("pipeline freshness policy bounds audio age during reconnection"
     Check(p.AudioStats.DroppedChunks >= 0, "stats reporting failed");
 });
 
+await TestAsync("pipeline retry budget exhausted when send succeeds but read fails repeatedly", async () => {
+    var audio = new TestAudioSource();
+    var asr = new FlakySendFailReadAsr();
+    await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
+    p.InitialRetryDelay = TimeSpan.FromMilliseconds(5);
+    p.MaxRetryDelay = TimeSpan.FromMilliseconds(20);
+    p.StableHealthyPeriod = TimeSpan.FromMilliseconds(500);
+    PipelineState lastState = PipelineState.Stopped;
+    p.StatusChanged += s => lastState = s.State;
+    await p.StartAsync();
+
+    using var pushCts = new CancellationTokenSource();
+    var pushTask = Task.Run(async () =>
+    {
+        while (!pushCts.IsCancellationRequested)
+        {
+            audio.Push();
+            await Task.Delay(20, pushCts.Token);
+        }
+    });
+
+    try
+    {
+        // With budget enforced, pipeline must terminate after 10 retries (11 attempts total)
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await p.Completion.WaitAsync(cts.Token);
+
+        Check(asr.SessionsCreated <= 11, $"retry budget exceeded: created {asr.SessionsCreated} sessions");
+        Check(lastState == PipelineState.Error, $"expected Error state but got {lastState}");
+    }
+    finally
+    {
+        pushCts.Cancel();
+        audio.Finish();
+        try { await pushTask; } catch { }
+    }
+});
+
+await TestAsync("pipeline terminates immediately without retry on fatal authentication error", async () => {
+    var audio = new TestAudioSource();
+    var asr = new FatalErrorAsr(ProviderErrorKind.Authentication);
+    await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
+    PipelineState lastState = PipelineState.Stopped;
+    p.StatusChanged += s => lastState = s.State;
+    await p.StartAsync();
+
+    audio.Push();
+    audio.Finish();
+
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await p.Completion.WaitAsync(cts.Token);
+
+    Check(asr.ConnectCalls == 1, $"authentication error should not retry: made {asr.ConnectCalls} attempts");
+    Check(lastState == PipelineState.Error, $"expected Error state but got {lastState}");
+});
+
+await TestAsync("pipeline terminates immediately without retry on fatal quota error", async () => {
+    var audio = new TestAudioSource();
+    var asr = new FatalErrorAsr(ProviderErrorKind.Quota);
+    await using var p = new CaptionPipeline(audio, asr, new CountingTranslator(), new() { Translation = new() { DebounceMilliseconds = 0 } });
+    PipelineState lastState = PipelineState.Stopped;
+    p.StatusChanged += s => lastState = s.State;
+    await p.StartAsync();
+
+    audio.Push();
+    audio.Finish();
+
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await p.Completion.WaitAsync(cts.Token);
+
+    Check(asr.ConnectCalls == 1, $"quota error should not retry: made {asr.ConnectCalls} attempts");
+    Check(lastState == PipelineState.Error, $"expected Error state but got {lastState}");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

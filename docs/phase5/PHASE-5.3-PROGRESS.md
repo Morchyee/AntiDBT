@@ -8,7 +8,7 @@
 | **A1** | 修复普通停止的尾句丢失与资源所有权 | P1 | **已完成** | `feat(phase5.3): A1 fix tail subtitle loss on stop and preserve resource ownership` |
 | **A2** | 字幕修正、译文状态与失败恢复 | P1 | **已完成** | `feat(phase5.3): A2 fix provisional translation cleanup, Korean spacing and error retry` |
 | **A3** | 音频新鲜度、溢出与时间轴 | P1 | **已完成** | `feat(phase5.3): A3 audio freshness bounded queue and discontinuity tracking` |
-| **A4** | Provider 错误与重连预算 | P1 | 待开始 | 待实施 |
+| **A4** | Provider 错误与重连预算 | P1 | **已完成** | `feat(phase5.3): A4 volcengine structured error mapping and stable retry budget` |
 | **A5** | 桌面状态、设置和本机端点闭环 | P1 | 待开始 | 待实施 |
 | **A6** | 测量与回归证据 | P2 | 待开始 | 待实施 |
 | **A7** | 运行时评估与受支持运行时环境 | P2 | 待开始 | 待实施 |
@@ -125,3 +125,30 @@
      - 全量 12 项测试套件 100% PASS。
 
 
+
+---
+
+## 七、A4 实施记录：Provider 错误与重连预算 (F4)
+
+- **缺陷根因确认**：
+  - `CaptionPipeline.cs:128` 每次 `SendAudioAsync` 成功就重置 `failures = 0`。导致“发一块成功、读端立即断开”的循环可以无限重置 10 次重连预算，陷入死循环。
+  - `VolcengineAsrProvider` 把连接异常、0b1111 协议错误、业务错误（`code != 0 && code != 20000000`）全部包成普通 `InvalidOperationException`，未映射为结构化 `ProviderException`，导致 Core 无法识别 Authentication/Quota/Configuration 等不可重试致命错误而盲目重连。
+  - `VolcengineMachineTranslationProvider` 未提取 HTTP 429 的 `Retry-After` 头，成功解析时未拒绝全空白译文。
+- **实施改动**：
+  1. `src/AntiDbt.Core/CaptionPipeline.cs`：
+     - 引入健康期门限判定（`StableHealthyPeriod`，默认 5.0s，可测配置）：单次发送音频成功不再清零预算，只有连接建立后持续稳定收发超过健康期才将 `failures` 清零。
+     - 发送与取消联动：音频发送绑定连接级 Token 并配置 5s 发送硬超时；`ReadResultsAsync` 读端异常时立即主动调用 `connection.Cancel()`，打断阻塞中的音频写入。
+     - 指数退避与冷却支持：重试退避采用指数退避（500ms ~ 5000ms），遇到 `RateLimited` 错误时严格尊重 `RetryAfter`（在 `[0, 60s]` 有效区间）。
+     - 不可恢复错误拦截：遇到 `Authentication`, `Configuration`, `Quota`, `ModelUnavailable`, `UnsupportedLanguage` 直接终止重试并发布对应状态。
+  2. `src/AntiDbt.Providers/VolcengineAsrProvider.cs`：
+     - 实现 `ClassifyWebSocketError`：识别握手 401/403/400/404/429/402/456，脱敏映射为对应 `ProviderErrorKind`。
+     - 解析 0b1111（type 15）服务端错误响应二进制 Payload 与 JSON Payload，提取业务错误码。
+     - 实现 `ClassifyAsrError`：将 1000~1003/401/403 映射为 `Authentication`，1004/45000001/45000151 映射为 `Configuration`，1005 映射为 `RateLimited`，45000081 映射为 `Timeout`，均采用本地安全脱敏错误信息，杜绝泄露服务端原始响应。
+  3. `src/AntiDbt.Providers/VolcengineMachineTranslationProvider.cs`：
+     - 拦截 HTTP 429：提取 `Retry-After` 头部构建结构化 `ProviderException(RateLimited, ..., retry)`。
+     - 结构化 HTTP 与业务错误码分类：将 1000~1003 映射为 `Authentication`，45000001 映射为 `Configuration`，456/402/10013 映射为 `Quota`。
+     - 空白译文拒绝：对空白或纯空白字符译文抛出 `ProviderErrorKind.InvalidResponse`。
+  4. **回归与测试验证**：
+     - `AntiDbt.Core.Tests` 新增 3 项测试（50/50 PASS）：发成功读立即失败重连预算耗尽（成功捕获并修复原死循环缺陷）、认证失败立即终止拒绝重连、配额不足立即终止拒绝重连。
+     - `AntiDbt.Providers.Tests` 新增 3 项测试（30/30 PASS）：429 提取 `Retry-After` 冷却、拒绝纯空白译文、0b1111 协议包解析映射为 `Authentication`。
+     - 全量 12 项测试套件 100% PASS（`verification-summary.json` 全绿）。

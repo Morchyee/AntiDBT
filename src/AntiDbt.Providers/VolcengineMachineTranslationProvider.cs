@@ -40,7 +40,24 @@ public sealed class VolcengineMachineTranslationProvider : ITranslationProvider
         {
             using var response = await client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (!response.IsSuccessStatusCode)
-                throw ProviderHttp.Failure(ProviderHttp.Classify(response.StatusCode,[]));
+            {
+                var kind = response.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.TooManyRequests => ProviderErrorKind.RateLimited,
+                    System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => ProviderErrorKind.Authentication,
+                    System.Net.HttpStatusCode.BadRequest => ProviderErrorKind.Configuration,
+                    System.Net.HttpStatusCode.NotFound => ProviderErrorKind.ModelUnavailable,
+                    (System.Net.HttpStatusCode)402 or (System.Net.HttpStatusCode)456 => ProviderErrorKind.Quota,
+                    _ => ProviderErrorKind.Service
+                };
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var retry = response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow) ?? TimeSpan.FromSeconds(1);
+                    if (retry < TimeSpan.Zero) retry = TimeSpan.Zero;
+                    throw new ProviderException(ProviderErrorKind.RateLimited, "请求限流，正在遵守服务冷却时间", retry);
+                }
+                throw ProviderHttp.Failure(kind);
+            }
             using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
             using var buffer = new MemoryStream();
             var bytes = new byte[8192];
@@ -54,11 +71,25 @@ public sealed class VolcengineMachineTranslationProvider : ITranslationProvider
             using var json = JsonDocument.Parse(buffer.ToArray());
             var root = json.RootElement;
             if (!root.TryGetProperty("code", out var code) || !code.TryGetInt32(out var value) || value != 20000000)
-                throw ProviderHttp.Failure(ProviderErrorKind.InvalidResponse);
+            {
+                int errCode = code.TryGetInt32(out var ec) ? ec : 0;
+                var kind = errCode switch
+                {
+                    1000 or 1001 or 1002 or 1003 => ProviderErrorKind.Authentication,
+                    1004 or 45000001 => ProviderErrorKind.Configuration,
+                    1005 or 429 => ProviderErrorKind.RateLimited,
+                    456 or 402 or 10013 => ProviderErrorKind.Quota,
+                    _ => ProviderErrorKind.InvalidResponse
+                };
+                throw ProviderHttp.Failure(kind);
+            }
             var list = root.GetProperty("data").GetProperty("translation_list");
             if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() != 1)
                 throw new JsonException();
-            return list[0].GetProperty("translation").GetString() ?? throw new JsonException();
+            var translation = list[0].GetProperty("translation").GetString();
+            if (string.IsNullOrWhiteSpace(translation))
+                throw ProviderHttp.Failure(ProviderErrorKind.InvalidResponse);
+            return translation;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { throw ProviderHttp.Failure(ProviderErrorKind.Timeout); }

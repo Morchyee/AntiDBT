@@ -62,3 +62,56 @@ sealed class DisposalAudio(bool failFirst=false) : IAudioSource
     public Task StopAsync(CancellationToken token)=>inner.StopAsync(token);
     public async ValueTask DisposeAsync(){Disposals++;await Task.Delay(30);if(failFirst&&Disposals==1)throw new IOException("first disposal failure");}
 }
+
+sealed class FlakySendFailReadAsr : IAsrProvider
+{
+    public int SessionsCreated;
+    public int SendCalls;
+    public IAsrSession CreateSession(AsrConfiguration config) => new Session(this);
+    sealed class Session(FlakySendFailReadAsr owner) : IAsrSession
+    {
+        public Task ConnectAsync(CancellationToken token)
+        {
+            owner.SessionsCreated++;
+            return Task.CompletedTask;
+        }
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token)
+        {
+            owner.SendCalls++;
+            return Task.CompletedTask;
+        }
+        public async IAsyncEnumerable<AsrResult> GetResultsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.Delay(5, token);
+            throw new IOException("read stream broken immediately after send");
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+        public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}
+
+sealed class FatalErrorAsr(ProviderErrorKind kind) : IAsrProvider
+{
+    public ProviderErrorKind Kind { get; } = kind;
+    public int ConnectCalls;
+    public IAsrSession CreateSession(AsrConfiguration config) => new Session(this);
+    sealed class Session(FatalErrorAsr owner) : IAsrSession
+    {
+        public Task ConnectAsync(CancellationToken token)
+        {
+            owner.ConnectCalls++;
+            throw new ProviderException(owner.Kind, "fatal error test");
+        }
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) => Task.CompletedTask;
+        public async IAsyncEnumerable<AsrResult> GetResultsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+        public Task CompleteAsync(CancellationToken token) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

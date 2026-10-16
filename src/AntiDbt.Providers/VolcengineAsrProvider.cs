@@ -22,6 +22,38 @@ public sealed class VolcengineAsrProvider : IAsrProvider
         private long finalizedThrough = -1, nextSegment;
         private int sequence = 1, reader, disposed;
         private bool completed;
+        private static ProviderException ClassifyWebSocketError(WebSocketException wse)
+        {
+            var msg = wse.Message;
+            if (msg.Contains("401") || msg.Contains("403"))
+                return ProviderHttp.Failure(ProviderErrorKind.Authentication);
+            if (msg.Contains("400"))
+                return ProviderHttp.Failure(ProviderErrorKind.Configuration);
+            if (msg.Contains("404"))
+                return ProviderHttp.Failure(ProviderErrorKind.ModelUnavailable);
+            if (msg.Contains("429"))
+                return new ProviderException(ProviderErrorKind.RateLimited, "请求限流，正在遵守服务冷却时间");
+            if (msg.Contains("402") || msg.Contains("456"))
+                return ProviderHttp.Failure(ProviderErrorKind.Quota);
+            return ProviderHttp.Failure(ProviderErrorKind.Network);
+        }
+        private static ProviderException ClassifyAsrError(int code)
+        {
+            var kind = code switch
+            {
+                1000 or 1001 or 1002 or 1003 => ProviderErrorKind.Authentication,
+                1004 or 45000001 or 45000151 => ProviderErrorKind.Configuration,
+                1005 => ProviderErrorKind.RateLimited,
+                45000081 => ProviderErrorKind.Timeout,
+                _ when code is 401 or 403 => ProviderErrorKind.Authentication,
+                _ when code is 400 => ProviderErrorKind.Configuration,
+                _ when code is 404 => ProviderErrorKind.ModelUnavailable,
+                _ when code is 429 => ProviderErrorKind.RateLimited,
+                _ when code is 402 or 456 => ProviderErrorKind.Quota,
+                _ => ProviderErrorKind.Service
+            };
+            return ProviderHttp.Failure(kind);
+        }
         public async Task ConnectAsync(CancellationToken cancellationToken)
         {
             var endpoint = ProviderConfiguration.Endpoint(config.Endpoint, true);
@@ -33,7 +65,7 @@ public sealed class VolcengineAsrProvider : IAsrProvider
             {
                 await socket.ConnectAsync(endpoint, cancellationToken);
             }
-            catch (WebSocketException) { throw new InvalidOperationException("语音服务连接失败。"); }
+            catch (WebSocketException wse) { throw ClassifyWebSocketError(wse); }
             var audio = new Dictionary<string, object> { ["format"] = "pcm", ["codec"] = "raw", ["rate"] = 16000, ["bits"] = 16, ["channel"] = 1 };
             if (!string.IsNullOrWhiteSpace(config.Language))
                 audio["language"] = config.Language;
@@ -86,7 +118,7 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                 if (last)
                     finalDrain.CancelAfter(TimeSpan.FromSeconds(3));
             }
-            catch (WebSocketException) { throw new InvalidOperationException("语音服务发送失败。"); }
+            catch (WebSocketException wse) { throw ClassifyWebSocketError(wse); }
             finally { sendLock.Release(); }
         }
         public async Task CompleteAsync(CancellationToken cancellationToken)
@@ -114,7 +146,7 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                         part = await socket.ReceiveAsync(bytes, receiveToken.Token);
                     }
                     catch (OperationCanceledException) when (finalDrain.IsCancellationRequested && !cancellationToken.IsCancellationRequested) { yield break; }
-                    catch (WebSocketException) { throw new InvalidOperationException("语音服务接收失败。"); }
+                    catch (WebSocketException wse) { throw ClassifyWebSocketError(wse); }
                     if (part.MessageType == WebSocketMessageType.Close)
                         yield break;
                     if (part.MessageType != WebSocketMessageType.Binary || buffer.Length + part.Count > Limit)
@@ -148,8 +180,8 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                     throw InvalidPacket();
                 offset += 4;
             }
-            if (type == 15)
-                throw new InvalidOperationException("语音服务返回协议错误。");
+
+
             if (packet.Length < offset + 4)
                 throw InvalidPacket();
             uint length = BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(offset));
@@ -175,6 +207,25 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                 }
                 catch (InvalidDataException) { throw InvalidPacket(); }
             }
+            if (type == 15)
+            {
+                int errorCode = 0;
+                if (payload.Length >= 4)
+                {
+                    errorCode = BinaryPrimitives.ReadInt32BigEndian(payload);
+                }
+                if (errorCode == 0 && payload.Length > 0)
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(payload);
+                        if (doc.RootElement.TryGetProperty("code", out var c) && c.TryGetInt32(out var parsedCode))
+                            errorCode = parsedCode;
+                    }
+                    catch { }
+                }
+                throw ClassifyAsrError(errorCode);
+            }
             return (payload, (flags & 2) != 0);
         }
         private List<AsrResult> Parse(byte[] payload, bool last)
@@ -184,7 +235,7 @@ public sealed class VolcengineAsrProvider : IAsrProvider
                 using var document = JsonDocument.Parse(payload);
                 var root = document.RootElement;
                 if (root.TryGetProperty("code", out var code) && code.GetInt32() is not (0 or 20000000))
-                    throw new InvalidOperationException("语音服务返回业务错误。");
+                    throw ClassifyAsrError(code.GetInt32());
                 if (root.TryGetProperty("payload_msg", out var wrapped))
                     root = wrapped;
                 if (!root.TryGetProperty("result", out var result))

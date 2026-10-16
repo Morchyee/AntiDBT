@@ -22,6 +22,9 @@ public sealed class CaptionPipeline : IAsyncDisposable
     public AudioQueueStats AudioStats => _queue.GetStats();
     public long DroppedAudioChunks => _queue.DroppedChunks;
     public long AudioDiscontinuities => _queue.Discontinuities;
+    public TimeSpan StableHealthyPeriod { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan InitialRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+    public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMilliseconds(5000);
     public event Action<PipelineStatus>? StatusChanged;
     public event Action<double>? AudioLevelChanged;
     public Task Completion { get; private set; } = Task.CompletedTask;
@@ -83,6 +86,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(token);
                 await using var session = _asr.CreateSession(_settings.Asr);
                 Task? reader = null;
+                long sessionConnectedTimestamp = 0;
                 try
                 {
                     Publish(failures == 0 ? PipelineState.Connecting : PipelineState.Retrying, "正在连接识别服务…");
@@ -93,6 +97,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     }
                     if (token.IsCancellationRequested)
                         break;
+                    sessionConnectedTimestamp = Stopwatch.GetTimestamp();
                     _translations.CancelPending();
                     var generation = Store.BeginSession(first);
                     first = false;
@@ -100,7 +105,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     var anchors = new List<(double End, long Timestamp)>();
                     var timelineLock = new object();
                     double sentSeconds = 0;
-                    reader = ReadResultsAsync(session, generation, anchors, timelineLock, connection.Token);
+                    reader = ReadResultsAsync(session, generation, anchors, timelineLock, connection);
                     long lastSent = Stopwatch.GetTimestamp();
                     while (!token.IsCancellationRequested && (!_captureEnded || _queue.Count > 0))
                     {
@@ -120,12 +125,19 @@ public sealed class CaptionPipeline : IAsyncDisposable
                                 chunk = new(new byte[6400], TimeSpan.Zero, TimeSpan.FromMilliseconds(200), Stopwatch.GetTimestamp());
                             else
                             {
-                                await Task.Delay(20, token);
+                                await Task.Delay(20, connection.Token);
                                 continue;
                             }
                         }
-                        await session.SendAudioAsync(chunk!.Pcm, token);
-                        failures = 0;
+                        using (var sendDeadline = CancellationTokenSource.CreateLinkedTokenSource(connection.Token))
+                        {
+                            sendDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+                            await session.SendAudioAsync(chunk!.Pcm, sendDeadline.Token);
+                        }
+                        if (failures > 0 && Stopwatch.GetElapsedTime(sessionConnectedTimestamp) >= StableHealthyPeriod)
+                        {
+                            failures = 0;
+                        }
                         lastSent = Stopwatch.GetTimestamp();
                         sentSeconds += chunk.AudioDuration.TotalSeconds;
                         lock (timelineLock)
@@ -136,7 +148,7 @@ public sealed class CaptionPipeline : IAsyncDisposable
                         }
                         // Pacing prevents a recovery backlog from monopolizing the socket or violating real-time API limits.
                         if (_queue.Count > 0)
-                            await Task.Delay(Math.Min(200, Math.Max(1, (int)chunk.AudioDuration.TotalMilliseconds)), token);
+                            await Task.Delay(Math.Min(200, Math.Max(1, (int)chunk.AudioDuration.TotalMilliseconds)), connection.Token);
                     }
                     if (_capture is not null)
                         await _capture;
@@ -164,8 +176,18 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     Store.BeginSession(false);
                     failures++;
                     Publish(PipelineState.Retrying, $"识别连接中断，正在重试 {failures}/10");
-                    var retry=error is ProviderException { Kind:ProviderErrorKind.RateLimited,RetryAfter:{ } interval }?interval:TimeSpan.FromMilliseconds(500);
-                    await Task.Delay(retry<TimeSpan.Zero?TimeSpan.Zero:retry, token);
+                    TimeSpan retry;
+                    if (error is ProviderException { Kind: ProviderErrorKind.RateLimited, RetryAfter: { } interval })
+                    {
+                        retry = interval < TimeSpan.Zero ? TimeSpan.Zero : interval > TimeSpan.FromSeconds(60) ? TimeSpan.FromSeconds(60) : interval;
+                    }
+                    else
+                    {
+                        double factor = Math.Pow(2, Math.Min(failures - 1, 4));
+                        double delayMs = Math.Min(MaxRetryDelay.TotalMilliseconds, InitialRetryDelay.TotalMilliseconds * factor);
+                        retry = TimeSpan.FromMilliseconds(delayMs);
+                    }
+                    await Task.Delay(retry, token);
                 }
                 finally
                 {
@@ -213,33 +235,41 @@ public sealed class CaptionPipeline : IAsyncDisposable
                 Publish(PipelineState.Stopped, "已停止");
         }
     }
-    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp)> anchors, object timelineLock, CancellationToken token)
+    private async Task ReadResultsAsync(IAsrSession session, long generation, List<(double End, long Timestamp)> anchors, object timelineLock, CancellationTokenSource connection)
     {
-        await foreach (var result in session.GetResultsAsync(token))
+        try
         {
-            if (result.IsDeleted)
+            await foreach (var result in session.GetResultsAsync(connection.Token))
             {
-                Store.ApplySource(generation, result);
-                _translations.CancelSegment(generation, result.SegmentId);
-                continue;
+                if (result.IsDeleted)
+                {
+                    Store.ApplySource(generation, result);
+                    _translations.CancelSegment(generation, result.SegmentId);
+                    continue;
+                }
+                var segment = Store.ApplySource(generation, result);
+                if (segment is null)
+                    continue;
+                long? audioEnd = null;
+                lock (timelineLock)
+                {
+                    var match = anchors.FirstOrDefault(x => x.End >= result.AudioEnd.TotalSeconds);
+                    if (match.Timestamp != 0)
+                        audioEnd = match.Timestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
+                }
+                if (audioEnd is { } timestamp)
+                {
+                    var elapsed = Stopwatch.GetElapsedTime(timestamp);
+                    if (elapsed >= TimeSpan.Zero && elapsed <= TimeSpan.FromSeconds(30))
+                        AsrLatency.Record(elapsed);
+                }
+                _translations.Schedule(segment);
             }
-            var segment = Store.ApplySource(generation, result);
-            if (segment is null)
-                continue;
-            long? audioEnd = null;
-            lock (timelineLock)
-            {
-                var match = anchors.FirstOrDefault(x => x.End >= result.AudioEnd.TotalSeconds);
-                if (match.Timestamp != 0)
-                    audioEnd = match.Timestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
-            }
-            if (audioEnd is { } timestamp)
-            {
-                var elapsed = Stopwatch.GetElapsedTime(timestamp);
-                if (elapsed >= TimeSpan.Zero && elapsed <= TimeSpan.FromSeconds(30))
-                    AsrLatency.Record(elapsed);
-            }
-            _translations.Schedule(segment);
+        }
+        catch (Exception)
+        {
+            try { connection.Cancel(); } catch { }
+            throw;
         }
     }
     public bool RetryTranslation(long session, string segmentId, int revision)
