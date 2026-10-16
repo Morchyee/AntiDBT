@@ -140,7 +140,7 @@ try {
     if (-not $SkipSmoke) {
         Write-Host "`n[5/6] Executing smoke test on published candidate binary..." -ForegroundColor Yellow
         $smokeDir = Join-Path $destination 'smoke-candidate-verify'
-        $smokeProc = Start-Process -FilePath $exePath -ArgumentList '--smoke-test', $smokeDir -WindowStyle Hidden -Wait -PassThru
+        $smokeProc = Start-Process -FilePath $exePath -ArgumentList @('--smoke-test', "`"$smokeDir`"") -WindowStyle Hidden -Wait -PassThru
         if ($smokeProc.ExitCode -ne 0) {
             throw "Candidate binary smoke test failed with exit code $($smokeProc.ExitCode)"
         }
