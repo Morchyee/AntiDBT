@@ -60,7 +60,8 @@ try {
 
     # 3. Copy Notices, Licenses & Documentation
     Write-Host "`n[3/6] Bundling documentation, licenses, and metadata..." -ForegroundColor Yellow
-    Copy-Item -LiteralPath README.md, THIRD-PARTY-NOTICES.md, LICENSE -Destination $destination
+    $readmes = @('README.md', 'README.en.md', 'README.zh-TW.md', 'README.ja.md') | Where-Object { Test-Path -LiteralPath $_ }
+    Copy-Item -LiteralPath ($readmes + @('THIRD-PARTY-NOTICES.md', 'LICENSE')) -Destination $destination
     if (Test-Path -LiteralPath licenses) {
         Copy-Item -LiteralPath licenses -Destination $destination -Recurse
     }

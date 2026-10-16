@@ -74,6 +74,11 @@ public sealed class MainWindow : Window
     };
 
     readonly Button start = new() { Content = "开始" }, expand = new() { Content = "展开" };
+    readonly Button sourceBtn = new() { Content = "原文" }, fontBtn = new() { Content = "字号" }, settingsBtn = new() { Content = "⚙" }, closeBtn = new() { Content = "×" };
+    readonly TextBlock langTitle = new() { FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) };
+    readonly TextBlock sourceBoxLabel = new(), targetBoxLabel = new();
+    readonly TextBlock providerNoticeText = new() { TextWrapping = TextWrapping.Wrap };
+    readonly Button swap = new() { Content = "⇄" };
     readonly Button bottom = new()
     {
         Content = "↓ 回到底部",
@@ -111,11 +116,12 @@ public sealed class MainWindow : Window
     {
         persistSettings = !testMode;
         settings = LanguageSettings.Upgrade(settings);
+        UiText.CurrentLanguage = settings.UiLanguage;
         store = new(settings.MaxHistory > 0 ? settings.MaxHistory : 2000);
         Resources["BoolToVis"] = new BooleanToVisibilityConverter();
         DesktopTheme.Apply(this, settings.Theme, settings.BackgroundOpacity);
 
-        Title = "antiDBT · 实时双语字幕";
+        Title = UiText.AppTitle;
         Width = 680;
         MinWidth = 520;
         MaxWidth = 2400;
@@ -160,18 +166,13 @@ public sealed class MainWindow : Window
         grid.Children.Add(toolbar);
 
         // Right side: Close button & Status Indicator
-        var close = new Button
-        {
-            Content = "×",
-            ToolTip = "停止采集并关闭",
-            MinWidth = 28,
-            Padding = new Thickness(6, 2, 6, 2),
-            Margin = new Thickness(4, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        DockPanel.SetDock(close, Dock.Right);
-        close.Click += (_, _) => Close();
-        toolbar.Children.Add(close);
+        closeBtn.MinWidth = 28;
+        closeBtn.Padding = new Thickness(6, 2, 6, 2);
+        closeBtn.Margin = new Thickness(4, 0, 0, 0);
+        closeBtn.VerticalAlignment = VerticalAlignment.Center;
+        DockPanel.SetDock(closeBtn, Dock.Right);
+        closeBtn.Click += (_, _) => Close();
+        toolbar.Children.Add(closeBtn);
 
         DockPanel.SetDock(statusBadge, Dock.Right);
         toolbar.Children.Add(statusBadge);
@@ -229,20 +230,13 @@ public sealed class MainWindow : Window
         }
         Tool(start, async () => await ToggleCaptureAsync());
         Tool(expand, () => SetExpanded(!expanded));
-        Tool(new Button { Content = "原文", ToolTip = "显示 / 隐藏原文" }, async () => { settings = settings with { ShowSource = !settings.ShowSource }; Render(); await SaveSettingsAsync(); });
-        Tool(new Button { Content = "字号", ToolTip = "切换字号（小 / 中 / 大）" }, async () => { settings = settings with { FontSize = settings.FontSize == "small" ? "medium" : settings.FontSize == "medium" ? "large" : "small" }; Render(); await SaveSettingsAsync(); });
-        Tool(new Button { Content = "⚙", ToolTip = "API 与字幕设置" }, async () => await OpenSettingsAsync());
+        Tool(sourceBtn, async () => { settings = settings with { ShowSource = !settings.ShowSource }; Render(); await SaveSettingsAsync(); });
+        Tool(fontBtn, async () => { settings = settings with { FontSize = settings.FontSize == "small" ? "medium" : settings.FontSize == "medium" ? "large" : "small" }; Render(); await SaveSettingsAsync(); });
+        Tool(settingsBtn, async () => await OpenSettingsAsync());
 
         // Language Popup Card
         languagePopup.PlacementTarget = languageTrigger;
         var langPanel = new StackPanel { Width = 370 };
-        var langTitle = new TextBlock
-        {
-            Text = "双语字幕语言设置",
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 10)
-        };
         langTitle.SetResourceReference(TextBlock.ForegroundProperty, "Ink");
         langPanel.Children.Add(langTitle);
 
@@ -252,21 +246,20 @@ public sealed class MainWindow : Window
         langGrid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
 
         var sourceBox = new StackPanel();
-        sourceBox.Children.Add(DesktopTheme.Note("识别源语言"));
+        sourceBoxLabel.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+        sourceBoxLabel.Margin = new Thickness(0, 0, 0, 4);
+        sourceBox.Children.Add(sourceBoxLabel);
         sourceBox.Children.Add(sourceLanguage);
 
         var targetBox = new StackPanel();
-        targetBox.Children.Add(DesktopTheme.Note("翻译目标语言"));
+        targetBoxLabel.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+        targetBoxLabel.Margin = new Thickness(0, 0, 0, 4);
+        targetBox.Children.Add(targetBoxLabel);
         targetBox.Children.Add(targetLanguage);
 
-        var swap = new Button
-        {
-            Content = "⇄",
-            ToolTip = "交换源语言与目标语言",
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(8, 0, 8, 4),
-            Padding = new Thickness(8, 6, 8, 6)
-        };
+        swap.VerticalAlignment = VerticalAlignment.Bottom;
+        swap.Margin = new Thickness(8, 0, 8, 4);
+        swap.Padding = new Thickness(8, 6, 8, 6);
 
         langGrid.Children.Add(sourceBox);
         langGrid.Children.Add(swap);
@@ -275,9 +268,10 @@ public sealed class MainWindow : Window
         Grid.SetColumn(targetBox, 2);
         langPanel.Children.Add(langGrid);
 
-        var providerNotice = DesktopTheme.Note("提示：源语言受 ASR 识别能力约束，目标语言由翻译服务决定。");
-        providerNotice.Margin = new Thickness(0, 4, 0, 0);
-        langPanel.Children.Add(providerNotice);
+        providerNoticeText.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+        providerNoticeText.FontSize = 11.5;
+        providerNoticeText.Margin = new Thickness(0, 4, 0, 0);
+        langPanel.Children.Add(providerNoticeText);
 
         var langCard = DesktopTheme.Card(langPanel, new Thickness(14));
         langCard.Margin = new Thickness(0);
@@ -380,16 +374,7 @@ public sealed class MainWindow : Window
         Grid.SetRow(bottom, 1);
 
         // Context Menu
-        ContextMenu = new();
-        MenuItem demo = new() { Header = "本地演示（不采集音频、不访问网络）" };
-        demo.Click += async (_, _) => await StartDemoAsync();
-        ContextMenu.Items.Add(demo);
-        MenuItem top = new() { Header = "窗口置顶", IsCheckable = true, IsChecked = true };
-        top.Click += async (_, _) => { Topmost = top.IsChecked; settings = settings with { Topmost = Topmost }; await SaveSettingsAsync(); };
-        ContextMenu.Items.Add(top);
-        MenuItem copy = new() { Header = "复制选中字幕 / 当前字幕" };
-        copy.Click += (_, _) => CopyCaption();
-        ContextMenu.Items.Add(copy);
+        RebuildContextMenu();
 
         KeyDown += (_, e) =>
         {
@@ -427,6 +412,7 @@ public sealed class MainWindow : Window
         };
         monitor.Start();
         ApplyTheme();
+        ApplyUiLanguage();
         RefreshLanguages();
         Render();
     }
@@ -437,7 +423,9 @@ public sealed class MainWindow : Window
         {
             var loaded = persistSettings ? await settingsStore.LoadAsync() : new AppSettings();
             settings = LanguageSettings.Upgrade(string.IsNullOrEmpty(loaded.Asr.Provider) ? ProviderCatalog.DefaultSettings() : loaded);
+            UiText.CurrentLanguage = settings.UiLanguage;
             ApplyTheme();
+            ApplyUiLanguage();
             RefreshLanguages();
             Topmost = persistSettings && settings.Topmost;
             var work = SystemParameters.WorkArea;
@@ -514,7 +502,9 @@ public sealed class MainWindow : Window
             {
                 await StopCaptureCoreAsync(StopReason.Reconfigure);
                 settings = newSettings;
+                UiText.CurrentLanguage = settings.UiLanguage;
                 ApplyTheme();
+                ApplyUiLanguage();
                 RefreshLanguages();
                 Topmost = settings.Topmost;
                 Render();
@@ -534,7 +524,9 @@ public sealed class MainWindow : Window
             else
             {
                 settings = newSettings;
+                UiText.CurrentLanguage = settings.UiLanguage;
                 ApplyTheme();
+                ApplyUiLanguage();
                 RefreshLanguages();
                 Topmost = settings.Topmost;
                 Render();
@@ -545,7 +537,9 @@ public sealed class MainWindow : Window
         else
         {
             settings = newSettings;
+            UiText.CurrentLanguage = settings.UiLanguage;
             ApplyTheme();
+            ApplyUiLanguage();
             RefreshLanguages();
             Topmost = settings.Topmost;
             Render();
@@ -769,7 +763,12 @@ public sealed class MainWindow : Window
         var s = LanguageRegistry.Find(settings.SourceLanguage)?.Name ?? settings.SourceLanguage;
         var t = LanguageRegistry.Find(settings.TargetLanguage)?.Name ?? settings.TargetLanguage;
         languageTrigger.Content = $"{s} → {t}  ▾";
-        languageTrigger.ToolTip = $"当前语言：{s} → {t}（点击更改）";
+        languageTrigger.ToolTip = UiText.CurrentLanguage switch
+        {
+            "en" => $"Current: {s} → {t} (Click to change)",
+            "ja" => $"現在の言語: {s} → {t}（クリックして変更）",
+            _ => $"当前语言：{s} → {t}（点击更改）"
+        };
     }
 
     void ApplyTheme()
@@ -779,6 +778,44 @@ public sealed class MainWindow : Window
         target.SetResourceReference(Control.ForegroundProperty, "Ink");
         history.SetResourceReference(Control.ForegroundProperty, "Ink");
         history.ItemTemplate = null;
+    }
+
+    void ApplyUiLanguage()
+    {
+        Title = UiText.AppTitle;
+        expand.Content = expanded ? UiText.Collapse : UiText.Expand;
+        expand.ToolTip = expanded ? UiText.CollapseTip : UiText.ExpandTip;
+        sourceBtn.Content = UiText.SourceBtn;
+        sourceBtn.ToolTip = UiText.SourceBtnTip;
+        fontBtn.Content = UiText.FontBtn;
+        fontBtn.ToolTip = UiText.FontBtnTip;
+        settingsBtn.Content = "⚙";
+        settingsBtn.ToolTip = UiText.SettingsBtnTip;
+        closeBtn.ToolTip = UiText.CloseBtnTip;
+        bottom.Content = UiText.BackToBottom;
+        bottom.ToolTip = UiText.BackToBottomTip;
+        swap.ToolTip = UiText.SwapLanguagesTip;
+        langTitle.Text = UiText.LangTitle;
+        sourceBoxLabel.Text = UiText.SourceBoxLabel;
+        targetBoxLabel.Text = UiText.TargetBoxLabel;
+        providerNoticeText.Text = UiText.ProviderNoticeText;
+        RebuildContextMenu();
+        UpdateStatusDisplay();
+    }
+
+    void RebuildContextMenu()
+    {
+        var menu = new ContextMenu();
+        MenuItem demo = new() { Header = UiText.MenuDemo };
+        demo.Click += async (_, _) => await StartDemoAsync();
+        menu.Items.Add(demo);
+        MenuItem top = new() { Header = UiText.MenuTopmost, IsCheckable = true, IsChecked = Topmost };
+        top.Click += async (_, _) => { Topmost = top.IsChecked; settings = settings with { Topmost = Topmost }; await SaveSettingsAsync(); };
+        menu.Items.Add(top);
+        MenuItem copy = new() { Header = UiText.MenuCopy };
+        copy.Click += (_, _) => CopyCaption();
+        menu.Items.Add(copy);
+        ContextMenu = menu;
     }
 
     public Task StartDemoAsync() => RunActionAsync(async () =>
@@ -810,7 +847,8 @@ public sealed class MainWindow : Window
     {
         expanded = value;
         userResized = false;
-        expand.Content = value ? "收起" : "展开";
+        expand.Content = value ? UiText.Collapse : UiText.Expand;
+        expand.ToolTip = value ? UiText.CollapseTip : UiText.ExpandTip;
         SizeToContent = SizeToContent.Height;
         var size = settings.FontSize == "small" ? 16 : settings.FontSize == "large" ? 32 : 20;
         var line = size == 16 ? 24 : size == 32 ? 44 : 28;
@@ -860,8 +898,8 @@ public sealed class MainWindow : Window
 
         var rows = store.Snapshot();
         var text = SubtitleProjection.Compact(rows);
-        source.Text = text.Source.Length > 0 ? text.Source : "系统播放的语音将实时显示在这里";
-        target.Text = text.Source.Length > 0 && text.Translation.Length > 0 ? text.Translation : (rows.Count > 0 ? "" : "译文将在下方显示");
+        source.Text = text.Source.Length > 0 ? text.Source : UiText.PlaceholderSource;
+        target.Text = text.Source.Length > 0 && text.Translation.Length > 0 ? text.Translation : (rows.Count > 0 ? "" : UiText.PlaceholderTarget);
 
         compact.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         history.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -938,7 +976,7 @@ public sealed class MainWindow : Window
         errorPanel.AppendChild(errText);
 
         var retryBtn = new FrameworkElementFactory(typeof(Button));
-        retryBtn.SetValue(Button.ContentProperty, "重试");
+        retryBtn.SetValue(Button.ContentProperty, UiText.Retry);
         retryBtn.SetValue(Button.FontSizeProperty, 11d);
         retryBtn.SetValue(Button.PaddingProperty, new Thickness(6, 1, 6, 1));
         retryBtn.SetValue(Button.MarginProperty, new Thickness(6, 0, 0, 0));
@@ -1001,23 +1039,23 @@ public sealed class MainWindow : Window
             if (hasTranslationError)
             {
                 statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 179, 0)); // Amber #FFB300
-                statusText.Text = "翻译异常";
+                statusText.Text = UiText.StatusTranslationError;
                 statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 179, 0));
-                start.Content = "停止";
-                tip += " · 存在未完成翻译错误，可在列表中点击重试";
+                start.Content = UiText.Stop;
+                tip += " · " + UiText.TipUnfinishedTranslationError;
             }
             else
             {
                 statusDot.Background = new SolidColorBrush(Color.FromRgb(76, 175, 80)); // Green #4CAF50
-                statusText.Text = "聆听中";
+                statusText.Text = UiText.StatusListening;
                 statusText.Foreground = new SolidColorBrush(Color.FromRgb(76, 175, 80));
-                start.Content = "停止";
+                start.Content = UiText.Stop;
             }
 
             var lastAudible = Interlocked.Read(ref lastAudibleTicks);
             if (lastAudible == 0 || DateTimeOffset.UtcNow.Ticks - lastAudible > TimeSpan.FromSeconds(3).Ticks)
             {
-                tip += " · 已连接但无音频信号（请确认系统正在播放声音）";
+                tip += " · " + UiText.TipNoAudioSignal;
             }
         }
         else
@@ -1026,34 +1064,34 @@ public sealed class MainWindow : Window
             {
                 case PipelineState.Connecting:
                     statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow #FFC107
-                    statusText.Text = "连接中";
+                    statusText.Text = UiText.StatusConnecting;
                     statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
-                    start.Content = "停止";
+                    start.Content = UiText.Stop;
                     break;
                 case PipelineState.Retrying:
                     statusDot.Background = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange #FF9800
-                    statusText.Text = "重试中";
+                    statusText.Text = UiText.StatusRetrying;
                     statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
-                    start.Content = "停止";
+                    start.Content = UiText.Stop;
                     break;
                 case PipelineState.Stopping:
                     statusDot.Background = new SolidColorBrush(Color.FromRgb(200, 200, 200));
-                    statusText.Text = "停止中";
+                    statusText.Text = UiText.StatusStopping;
                     statusText.Foreground = Brushes.Gray;
-                    start.Content = "停止";
+                    start.Content = UiText.Stop;
                     break;
                 case PipelineState.Error:
                     statusDot.Background = new SolidColorBrush(Color.FromRgb(244, 67, 54)); // Red #F44336
-                    statusText.Text = "连接异常";
+                    statusText.Text = UiText.StatusError;
                     statusText.Foreground = new SolidColorBrush(Color.FromRgb(244, 67, 54));
-                    start.Content = "重试";
+                    start.Content = UiText.Retry;
                     break;
                 case PipelineState.Stopped:
                 default:
                     statusDot.Background = new SolidColorBrush(Color.FromRgb(158, 158, 158)); // Gray #9E9E9E
-                    statusText.Text = "未开始";
+                    statusText.Text = UiText.StatusIdle;
                     statusText.Foreground = Brushes.Gray;
-                    start.Content = "开始";
+                    start.Content = UiText.Start;
                     break;
             }
         }

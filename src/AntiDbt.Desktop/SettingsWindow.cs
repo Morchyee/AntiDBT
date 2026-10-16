@@ -15,7 +15,7 @@ public sealed class SettingsWindow : Window
     readonly ProviderEditor asr, mt;
     readonly LanguagePicker sourceLanguage = new(), targetLanguage = new();
     string sourceId, targetId;
-    readonly ComboBox font = new(), devices = new(), theme = new(), backup = new() { DisplayMemberPath = "DisplayName", SelectedValuePath = "Id" };
+    readonly ComboBox font = new(), devices = new(), theme = new(), backup = new() { DisplayMemberPath = "DisplayName", SelectedValuePath = "Id" }, uiLanguage = new() { DisplayMemberPath = "DisplayName", SelectedValuePath = "Code" };
     readonly Slider opacity = new() { Minimum = 0, Maximum = 100, TickFrequency = 5, IsSnapToTickEnabled = true, SmallChange = 5, LargeChange = 10, Margin = new Thickness(0, 0, 12, 0) };
     readonly TextBlock opacityLabel = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, MinWidth = 45 };
     readonly TextBox debounce = new(), timeout = new(), context = new();
@@ -28,52 +28,64 @@ public sealed class SettingsWindow : Window
     public SettingsWindow(AppSettings settings)
     {
         original = Result = LanguageSettings.Upgrade(settings); settings = original; sourceId = settings.SourceLanguage; targetId = settings.TargetLanguage;
+        UiText.CurrentLanguage = settings.UiLanguage ?? "zh-Hans";
         asrProfiles = new(settings.AsrProfiles); mtProfiles = new(settings.TranslationProfiles);
         asrProfiles[settings.Asr.Provider] = settings.Asr; mtProfiles[settings.Translation.Provider] = settings.Translation;
-        Title = "antiDBT · 设置"; Width = 980; Height = 800; MinWidth = 680; MinHeight = 460;
+        Title = UiText.CurrentLanguage switch { "en" => "antiDBT · Settings", "ja" => "antiDBT · 設定", _ => "antiDBT · 设置" };
+        Width = 980; Height = 800; MinWidth = 680; MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterOwner; DesktopTheme.Apply(this, settings.Theme);
         Closed += (_, _) => { lifetime.Cancel(); asr?.CancelRequests(); mt?.CancelRequests(); asr?.HideSecrets(); mt?.HideSecrets(); };
         var root = new DockPanel { Margin = new Thickness(24) }; Content = root;
         var title = new StackPanel { Margin = new Thickness(0, 0, 0, 20) }; DockPanel.SetDock(title, Dock.Top); root.Children.Add(title);
-        title.Children.Add(new TextBlock { Text = "让字幕适合你的工作方式", FontSize = 25, FontWeight = FontWeights.SemiBold });
-        title.Children.Add(DesktopTheme.Note("语言、识别与翻译服务 · 设置保存后，下次开始时生效"));
+        title.Children.Add(new TextBlock { Text = UiText.CurrentLanguage switch { "en" => "Tailor Subtitles to Your Workflow", "ja" => "あなたの作業スタイルに字幕を最適化", _ => "让字幕适合你的工作方式" }, FontSize = 25, FontWeight = FontWeights.SemiBold });
+        title.Children.Add(DesktopTheme.Note(UiText.CurrentLanguage switch { "en" => "Languages, ASR and MT providers · Settings take effect upon next start", "ja" => "言語・音声認識・翻訳サービス · 保存後の次回開始時に反映", _ => "语言、识别与翻译服务 · 设置保存后，下次开始时生效" }));
         var bottom = new StackPanel { Margin = new Thickness(0, 16, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom); bottom.Children.Add(error);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right }; bottom.Children.Add(actions);
-        var cancel = new Button { Content = "取消", IsCancel = true }; cancel.Click += (_, _) => Close(); actions.Children.Add(cancel);
-        var save = new Button { Content = "保存设置", IsDefault = true }; save.Click += (_, _) => Save(); actions.Children.Add(save);
+        var cancel = new Button { Content = UiText.BtnCancel, IsCancel = true }; cancel.Click += (_, _) => Close(); actions.Children.Add(cancel);
+        var save = new Button { Content = UiText.BtnSaveSettings, IsDefault = true }; save.Click += (_, _) => Save(); actions.Children.Add(save);
         var body = new Grid(); body.ColumnDefinitions.Add(new() { Width = new GridLength(150) }); body.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); root.Children.Add(body);
         body.Children.Add(navigation); body.Children.Add(scroller); Grid.SetColumn(scroller, 1); ScrollRelay.Attach(scroller);
         var pageHost = new Grid(); scroller.Content = pageHost;
-        foreach (var name in new[] { "常规", "语音识别", "翻译服务", "音频", "外观", "网络与代理", "高级", "关于" })
+        foreach (var canonical in new[] { "常规", "语音识别", "翻译服务", "音频", "外观", "网络与代理", "高级", "关于" })
         {
             var page = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 12, 0) };
-            pages[name] = page; pageHost.Children.Add(page); navigation.Items.Add(name);
-            page.Children.Add(new TextBlock { Text = name, FontSize = 22, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 18) });
+            pages[canonical] = page; pageHost.Children.Add(page);
+            var disp = GetNavDisplayName(canonical);
+            navigation.Items.Add(disp);
+            page.Children.Add(new TextBlock { Text = disp, FontSize = 22, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 18) });
         }
         navigation.SelectionChanged += (_, _) => SelectPage(navigation.SelectedItem as string ?? "常规");
         asr = new ProviderEditor(this, true, settings.Asr.Provider); mt = new ProviderEditor(this, false, settings.Translation.Provider);
         pages["语音识别"].Children.Add(DesktopTheme.Card(asr.Panel)); pages["翻译服务"].Children.Add(DesktopTheme.Card(mt.Panel));
-        var languages = Card(pages["常规"], "语言与窗口");
-        Field(languages, "源语言 · 随识别服务能力筛选", sourceLanguage); Field(languages, "目标语言 · 同语言直通无需翻译调用", targetLanguage);
+        var languages = Card(pages["常规"], UiText.CardLanguageAndWindow);
+        Field(languages, UiText.FieldSourceLanguage, sourceLanguage); Field(languages, UiText.FieldTargetLanguage, targetLanguage);
         sourceLanguage.Selected += id => { sourceId = id; SyncLanguages(); }; targetLanguage.Selected += id => { targetId = id; SyncLanguages(); };
+        source.Content = UiText.CheckboxShowSource; pin.Content = UiText.CheckboxTopmost;
         source.IsChecked = settings.ShowSource; pin.IsChecked = settings.Topmost; languages.Children.Add(source); languages.Children.Add(pin);
-        var check = new Button { Content = "检查当前配置（不联网）", HorizontalAlignment = HorizontalAlignment.Left }; languages.Children.Add(check);
-        check.Click += (_, _) => { try { var value = BuildResult(); error.Text = ProviderLanguages.ValidateSettings(value) ?? "配置完整 · 认证和真实请求尚未验证"; } catch (ArgumentException e) { error.Text = e.Message; } };
-        Note(languages, "切换服务会保留当前语言；不支持的选项保持可见并说明原因，不会自动改为英语。");
-        var backupCard = Card(pages["翻译服务"], "备用翻译");
+        var check = new Button { Content = UiText.BtnCheckConfig, HorizontalAlignment = HorizontalAlignment.Left }; languages.Children.Add(check);
+        check.Click += (_, _) => { try { var value = BuildResult(); error.Text = ProviderLanguages.ValidateSettings(value) ?? UiText.ConfigValidMsg; } catch (ArgumentException e) { error.Text = e.Message; } };
+        Note(languages, UiText.NoteLanguagePreserve);
+        var backupCard = Card(pages["翻译服务"], UiText.CardBackupTranslation);
+        fallback.Content = UiText.CheckboxFallbackEnable;
+        consent.Content = UiText.CheckboxFallbackConsent;
         fallback.IsChecked = settings.FallbackEnabled; consent.IsChecked = settings.FallbackCostConsent;
         backupCard.Children.Add(fallback); backupCard.Children.Add(consent); backup.ItemsSource = ProviderDescriptors.Translation; backup.SelectedValue = settings.FallbackTranslationProviderId;
-        Field(backupCard, "选择其他已配置的服务（先在上方切换服务完成配置）", backup);
-        Note(backupCard, "默认关闭。只有启用、确认额外费用并配置不同的备用服务，才允许自动回退；运行前会检查语言和凭据。");
-        var audio = Card(pages["音频"], "系统音频回环"); devices.DisplayMemberPath = "Name"; devices.SelectedValuePath = "Id";
-        devices.Items.Add(new AudioDevice("", "跟随启动时的默认输出设备", true));
-        try { foreach (var device in WasapiAudioSource.ListDevices()) devices.Items.Add(device); } catch { Note(audio, "无法枚举音频设备，可保留默认输出设备后重试。"); }
-        devices.SelectedValue = settings.AudioDeviceId; if (devices.SelectedIndex < 0) devices.SelectedIndex = 0; Field(audio, "播放设备", devices);
-        Note(audio, "点击主窗口“开始”后才会采集并向所选识别服务发送系统音频。连接检查不会发送录音。");
-        var appearance = Card(pages["外观"], "主题与文字");
-        foreach (var value in new[] { "System", "Dark", "Light" }) theme.Items.Add(value); theme.SelectedItem = settings.Theme; Field(appearance, "主题 · System 跟随系统 / Dark 深色 / Light 浅色", theme);
+        Field(backupCard, UiText.FieldBackupProvider, backup);
+        Note(backupCard, UiText.NoteBackupFallback);
+        var audio = Card(pages["音频"], UiText.CardSystemAudio); devices.DisplayMemberPath = "Name"; devices.SelectedValuePath = "Id";
+        devices.Items.Add(new AudioDevice("", UiText.AudioDefaultDevice, true));
+        try { foreach (var device in WasapiAudioSource.ListDevices()) devices.Items.Add(device); } catch { Note(audio, UiText.AudioCannotEnumerate); }
+        devices.SelectedValue = settings.AudioDeviceId; if (devices.SelectedIndex < 0) devices.SelectedIndex = 0; Field(audio, UiText.FieldAudioPlaybackDevice, devices);
+        Note(audio, UiText.NoteAudioCapture);
+        var appearance = Card(pages["外观"], UiText.CardThemeAndFont);
+        foreach (var (code, disp) in UiText.SupportedLanguages)
+            uiLanguage.Items.Add(new { Code = code, DisplayName = $"{disp} ({code})" });
+        uiLanguage.SelectedValue = UiText.NormalizeLanguage(settings.UiLanguage);
+        if (uiLanguage.SelectedIndex < 0) uiLanguage.SelectedIndex = 0;
+        Field(appearance, UiText.FieldUiLanguage, uiLanguage);
+        foreach (var value in new[] { "System", "Dark", "Light" }) theme.Items.Add(value); theme.SelectedItem = settings.Theme; Field(appearance, UiText.FieldTheme, theme);
         theme.SelectionChanged += (_, _) => DesktopTheme.Apply(this, theme.SelectedItem as string ?? "System");
-        foreach (var value in new[] { "small", "medium", "large" }) font.Items.Add(value); font.SelectedItem = settings.FontSize; Field(appearance, "字号 · small 小 / medium 中 / large 大", font);
+        foreach (var value in new[] { "small", "medium", "large" }) font.Items.Add(value); font.SelectedItem = settings.FontSize; Field(appearance, UiText.FieldFontSize, font);
         opacity.Value = Math.Round(Math.Clamp(settings.BackgroundOpacity, 0.0, 1.0) * 100.0);
         opacityLabel.Text = $"{(int)opacity.Value}%";
         opacityLabel.SetResourceReference(TextBlock.ForegroundProperty, "Ink");
@@ -88,22 +100,51 @@ public sealed class SettingsWindow : Window
             if (Owner is MainWindow main)
                 main.ApplyLiveOpacity(val / 100.0);
         };
-        Field(appearance, "背景不透明度 · 0% 完全透明 / 50% 明显半透 / 80% 推荐默认 / 100% 完全不透", opacityBox);
-        Note(appearance, "背景透明度支持桌面实时透视预览，文字与控制台保持高对比清晰度；主窗口支持拖动、缩放与自适应。");
-        var network = Card(pages["网络与代理"], "当前使用系统网络设置");
-        Note(network, "HTTP / SDK 请求使用 Windows 与 .NET 的系统代理设置。本版本没有独立代理地址、账号或代理连通性开关；请在 Windows 设置中管理代理。");
-        Note(network, "修改自定义服务地址的主机、协议或端口会清除该服务凭据。修改模型或任何接口路径会清除该模型语言声明，需重新确认。");
-        var advanced = Card(pages["高级"], "请求与上下文");
-        Field(advanced, "增量翻译合并间隔（毫秒，0–2000）", debounce); debounce.Text = settings.Translation.DebounceMilliseconds.ToString();
-        Field(advanced, "翻译请求超时（秒，1–120）", timeout); timeout.Text = settings.Translation.TimeoutSeconds.ToString();
-        Field(advanced, "上下文句数（0–12，服务支持时使用）", context); context.Text = settings.Translation.ContextSentences.ToString();
-        var about = Card(pages["关于"], "antiDBT · 实时双语字幕");
-        Note(about, "凭据使用 Windows DPAPI 按当前用户加密保存。每个服务独立保留配置；服务账户 JSON 可直接粘贴。显示密钥是显式操作，隐藏或离开服务会清除明文视图。");
-        Note(about, "配置完整、请求成功与翻译质量是不同状态。公开样例测试可能计费，只在你点击测试时执行。Seed LiveInterpret 2.0 尚未启用；没有自动云端测试。");
+        Field(appearance, UiText.FieldOpacity, opacityBox);
+        Note(appearance, UiText.NoteOpacity);
+        var network = Card(pages["网络与代理"], UiText.CardNetworkProxy);
+        Note(network, UiText.NoteNetworkProxy1);
+        Note(network, UiText.NoteNetworkProxy2);
+        var advanced = Card(pages["高级"], UiText.CardAdvanced);
+        Field(advanced, UiText.FieldDebounce, debounce); debounce.Text = settings.Translation.DebounceMilliseconds.ToString();
+        Field(advanced, UiText.FieldTimeout, timeout); timeout.Text = settings.Translation.TimeoutSeconds.ToString();
+        Field(advanced, UiText.FieldContext, context); context.Text = settings.Translation.ContextSentences.ToString();
+        var about = Card(pages["关于"], UiText.CardAbout);
+        Note(about, UiText.NoteAbout1);
+        Note(about, UiText.NoteAbout2);
         SyncLanguages(); navigation.SelectedIndex = 0;
     }
     static StackPanel Card(Panel page, string title) { var content = new StackPanel(); Heading(content, title); page.Children.Add(DesktopTheme.Card(content)); return content; }
-    void SelectPage(string name) { foreach (var pair in pages) pair.Value.Visibility = pair.Key == name ? Visibility.Visible : Visibility.Collapsed; scroller.ScrollToTop(); }
+    static string GetNavDisplayName(string canonical) => canonical switch
+    {
+        "常规" => UiText.NavGeneral,
+        "语音识别" => UiText.NavAsr,
+        "翻译服务" => UiText.NavMt,
+        "音频" => UiText.NavAudio,
+        "外观" => UiText.NavAppearance,
+        "网络与代理" => UiText.NavNetwork,
+        "高级" => UiText.NavAdvanced,
+        "关于" => UiText.NavAbout,
+        _ => canonical
+    };
+    static string GetCanonicalPageKey(string name) => name switch
+    {
+        "常规" or "General" or "一般" => "常规",
+        "语音识别" or "Speech Recognition" or "音声認識" => "语音识别",
+        "翻译服务" or "Translation" or "翻訳サービス" => "翻译服务",
+        "音频" or "Audio" or "オーディオ" => "音频",
+        "外观" or "Appearance" or "外観" => "外观",
+        "网络与代理" or "Network" or "ネットワーク" => "网络与代理",
+        "高级" or "Advanced" or "詳細設定" => "高级",
+        "关于" or "About" or "情報" => "关于",
+        _ => name
+    };
+    void SelectPage(string name)
+    {
+        var canonical = GetCanonicalPageKey(name);
+        foreach (var pair in pages) pair.Value.Visibility = pair.Key == canonical ? Visibility.Visible : Visibility.Collapsed;
+        scroller.ScrollToTop();
+    }
     void SyncLanguages()
     {
         asr.Snapshot(); mt.Snapshot();
@@ -148,7 +189,8 @@ public sealed class SettingsWindow : Window
         ValidateEndpoint(mt.Id, mtProfiles[mt.Id].Endpoint, mtProfiles[mt.Id].Options);
         if (!int.TryParse(debounce.Text, out var delay) || delay < 0 || delay > 2000 || !int.TryParse(timeout.Text, out var seconds) || seconds < 1 || seconds > 120 || !int.TryParse(context.Text, out var count) || count < 0 || count > 12) throw new ArgumentException("请填写有效的合并间隔、超时和上下文句数。");
         var translation = mtProfiles[mt.Id] with { DebounceMilliseconds = delay, TimeoutSeconds = seconds, ContextSentences = count }; mtProfiles[mt.Id] = translation;
-        var value = original with { Asr = asrProfiles[asr.Id], Translation = translation, AsrProfiles = new(asrProfiles), TranslationProfiles = new(mtProfiles), SourceLanguage = sourceId, TargetLanguage = targetId, Theme = theme.SelectedItem as string ?? "System", FallbackEnabled = fallback.IsChecked == true, FallbackCostConsent = consent.IsChecked == true, FallbackTranslationProviderId = backup.SelectedValue as string ?? "", FontSize = font.SelectedItem as string ?? "medium", ShowSource = source.IsChecked == true, Topmost = pin.IsChecked == true, AudioDeviceId = devices.SelectedValue as string ?? "", BackgroundOpacity = opacity.Value / 100.0 };
+        var selectedUiLang = (uiLanguage.SelectedValue as string) ?? "zh-Hans";
+        var value = original with { UiLanguage = selectedUiLang, Asr = asrProfiles[asr.Id], Translation = translation, AsrProfiles = new(asrProfiles), TranslationProfiles = new(mtProfiles), SourceLanguage = sourceId, TargetLanguage = targetId, Theme = theme.SelectedItem as string ?? "System", FallbackEnabled = fallback.IsChecked == true, FallbackCostConsent = consent.IsChecked == true, FallbackTranslationProviderId = backup.SelectedValue as string ?? "", FontSize = font.SelectedItem as string ?? "medium", ShowSource = source.IsChecked == true, Topmost = pin.IsChecked == true, AudioDeviceId = devices.SelectedValue as string ?? "", BackgroundOpacity = opacity.Value / 100.0 };
         return LanguageRegistry.Find(sourceId) is not null && LanguageRegistry.Find(targetId) is not null ? LanguageSettings.Select(value, sourceId, targetId) : value;
     }
     internal void TestSave() => Save(false);
@@ -178,7 +220,20 @@ public sealed class SettingsWindow : Window
     internal ProviderEditor TestTranslation => mt;
     internal CancellationToken TestLifetimeToken => lifetime.Token;
     internal int TestNavigationCount => navigation.Items.Count;
-    internal void TestPage(string name) => navigation.SelectedItem = name;
+    internal void TestPage(string name)
+    {
+        var canonical = GetCanonicalPageKey(name);
+        var disp = GetNavDisplayName(canonical);
+        foreach (var item in navigation.Items)
+        {
+            if (item is string s && (s == name || s == disp || s == canonical))
+            {
+                navigation.SelectedItem = item;
+                return;
+            }
+        }
+        navigation.SelectedItem = name;
+    }
     internal ScrollViewer TestScroller => scroller;
     internal void TestLanguage(string source, string target) { sourceId = source; targetId = target; SyncLanguages(); }
     internal void TestTheme(string value) => theme.SelectedItem = value;
@@ -288,16 +343,16 @@ public sealed class SettingsWindow : Window
             Link("申请 / 控制台 ↗", guide.ApplicationUrl); Link("官方文档 ↗", guide.DocumentationUrl); Link("计费说明 ↗", guide.BillingUrl); Note(fields, guide.Note);
             Note(fields, "以下联网操作仅在点击后执行。使用公开样例，不会发送字幕历史；样例翻译和连接初始化可能按服务规则计费。");
             var probes = new WrapPanel(); fields.Children.Add(probes);
-            AddProbe(probes, isAsr ? "连接检查（无音频）" : "连接检查（可能使用公开样例）", async token => isAsr ? await ProviderDiagnostics.TestAsrConnectionAsync(owner.asrProfiles[current], owner.sourceId, token) : await ProviderDiagnostics.TestConnectionAsync(owner.mtProfiles[current], owner.sourceId, owner.targetId, token));
+            AddProbe(probes, isAsr ? UiText.BtnTestConnectionNoAudio : UiText.BtnTestConnectionSample, async token => isAsr ? await ProviderDiagnostics.TestAsrConnectionAsync(owner.asrProfiles[current], owner.sourceId, token) : await ProviderDiagnostics.TestConnectionAsync(owner.mtProfiles[current], owner.sourceId, owner.targetId, token));
             if (!isAsr)
             {
-                AddProbe(probes, "公开样例翻译（可能计费）", token => ProviderDiagnostics.TestTranslationAsync(owner.mtProfiles[current], owner.sourceId, owner.targetId, token));
-                if (d.Id is "GroqLlm" or "OpenAiCompatible") AddProbe(probes, "获取文本模型列表", async token => { var models = await ProviderDiagnostics.FetchModelsAsync(owner.mtProfiles[current], token); token.ThrowIfCancellationRequested(); if (controls["Model"] is ComboBox c) c.ItemsSource = models; else controls["Model"].ToolTip = string.Join("\n", models); return new(true, "模型目录请求成功；可手动填写模型 ID：" + string.Join("、", models.Take(12)) + "。语言与质量尚未验证。"); });
+                AddProbe(probes, UiText.BtnTestSampleTranslation, token => ProviderDiagnostics.TestTranslationAsync(owner.mtProfiles[current], owner.sourceId, owner.targetId, token));
+                if (d.Id is "GroqLlm" or "OpenAiCompatible") AddProbe(probes, UiText.BtnFetchModels, async token => { var models = await ProviderDiagnostics.FetchModelsAsync(owner.mtProfiles[current], token); token.ThrowIfCancellationRequested(); if (controls["Model"] is ComboBox c) c.ItemsSource = models; else controls["Model"].ToolTip = string.Join("\n", models); return new(true, "模型目录请求成功；可手动填写模型 ID：" + string.Join("、", models.Take(12)) + "。语言与质量尚未验证。"); });
                 if (d.Id == "DeepL")
                 {
                     var cache = DeepLLanguageCache.Status(owner.mtProfiles.GetValueOrDefault(current) ?? ProviderDescriptors.DefaultTranslation(current));
                     Note(fields, cache is null ? "DeepL 语言目录：使用文档快照，可显式刷新一小时内存缓存。" : $"目录 {cache.Version} · {cache.FetchedAtUtc:O} · 目标 {cache.TargetCount}");
-                    AddProbe(probes, "刷新 DeepL 语言目录", async token => { var status = await DeepLLanguageCache.RefreshAsync(owner.mtProfiles[current], token, true); token.ThrowIfCancellationRequested(); owner.SyncLanguages(); return new(true, $"语言目录已刷新 · {status.Version} · 有效至 {status.ExpiresAtUtc:O}"); });
+                    AddProbe(probes, UiText.BtnRefreshDeepL, async token => { var status = await DeepLLanguageCache.RefreshAsync(owner.mtProfiles[current], token, true); token.ThrowIfCancellationRequested(); owner.SyncLanguages(); return new(true, $"语言目录已刷新 · {status.Version} · 有效至 {status.ExpiresAtUtc:O}"); });
                 }
             }
             fields.Children.Add(probeStatus); rendering = false; Snapshot();
@@ -308,10 +363,10 @@ public sealed class SettingsWindow : Window
             button.Click += async (_, _) =>
             {
                 Snapshot(); CancelRequests(); var active = CancellationTokenSource.CreateLinkedTokenSource(owner.lifetime.Token); request = active;
-                button.IsEnabled = false; probeStatus.Text = "正在请求… · 切换服务或关闭窗口会取消";
-                try { var result = await probe(active.Token); if (!active.IsCancellationRequested && ReferenceEquals(request, active)) probeStatus.Text = (result.Success ? "请求成功 · " : "最后测试错误 · ") + result.Message + (result.Translation.Length > 0 ? "\n公开样例译文：" + result.Translation : ""); }
+                button.IsEnabled = false; probeStatus.Text = UiText.RequestingPrompt;
+                try { var result = await probe(active.Token); if (!active.IsCancellationRequested && ReferenceEquals(request, active)) probeStatus.Text = (result.Success ? UiText.RequestSuccessPrompt : UiText.RequestErrorPrompt) + result.Message + (result.Translation.Length > 0 ? "\n公开样例译文：" + result.Translation : ""); }
                 catch (OperationCanceledException) when (active.IsCancellationRequested) { }
-                catch { if (!active.IsCancellationRequested) probeStatus.Text = "最后测试错误 · 请求未完成，请检查配置与网络"; }
+                catch { if (!active.IsCancellationRequested) probeStatus.Text = UiText.RequestErrorPrompt + "请求未完成，请检查配置与网络"; }
                 finally { if (ReferenceEquals(request, active)) { request = null; active.Dispose(); } button.IsEnabled = true; }
             };
         }

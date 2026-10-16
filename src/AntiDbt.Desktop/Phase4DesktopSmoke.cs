@@ -515,6 +515,31 @@ internal static class Phase4DesktopSmoke
         await main.TestStopCaptureAsync();
         await Idle(main);
         main.TestPipelineFactory = null;
+
+        // 5. Multilingual UI verification (zh-Hans, en, ja)
+        check("UI language defaults to zh-Hans", main.Title == "antiDBT · 实时双语字幕" && main.TestStatusText == "未开始" && main.TestStartButtonContent == "开始");
+
+        await main.TestApplySettingsResultAsync(main.TestSettings with { UiLanguage = "en" });
+        await Idle(main);
+        check("UI language live switches to English", main.Title == "antiDBT · Realtime Bilingual Subtitles" && main.TestStatusText == "Idle" && main.TestStartButtonContent == "Start" && main.ContextMenu?.Items[0] is MenuItem mEn && (mEn.Header as string) == "Local Demo (No audio capture, no network)");
+
+        await main.TestApplySettingsResultAsync(main.TestSettings with { UiLanguage = "ja" });
+        await Idle(main);
+        check("UI language live switches to Japanese", main.Title == "antiDBT · リアルタイム二言語字幕" && main.TestStatusText == "待機中" && main.TestStartButtonContent == "開始" && main.ContextMenu?.Items[0] is MenuItem mJa && (mJa.Header as string) == "ローカルデモ（音声入力なし・通信なし）");
+
+        await main.TestApplySettingsResultAsync(main.TestSettings with { UiLanguage = "zh-Hans" });
+        await Idle(main);
+        check("UI language live restores to Simplified Chinese", main.Title == "antiDBT · 实时双语字幕" && main.TestStatusText == "未开始" && main.TestStartButtonContent == "开始");
+
+        var settingsEn = new SettingsWindow(main.TestSettings with { UiLanguage = "en" });
+        settingsEn.TestPage("General");
+        check("SettingsWindow supports English localized navigation", settingsEn.TestNavigationCount == 8);
+        settingsEn.Close();
+
+        var settingsJa = new SettingsWindow(main.TestSettings with { UiLanguage = "ja" });
+        settingsJa.TestPage("一般");
+        check("SettingsWindow supports Japanese localized navigation", settingsJa.TestNavigationCount == 8);
+        settingsJa.Close();
     }
 
     sealed class ControllableFixtureTranslator : ITranslationProvider

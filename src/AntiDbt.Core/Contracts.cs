@@ -67,6 +67,7 @@ public sealed record AppSettings
 {
     // Empty is the legacy sentinel; LanguageSettings.Upgrade derives it from Asr.Language.
     public string SourceLanguage { get; init; } = "";
+    public string UiLanguage { get; init; } = "zh-Hans";
     public List<string> RecentLanguages { get; init; } = new();
     public string Theme { get; init; } = "System";
     public string FallbackTranslationProviderId { get; init; } = "";
