@@ -104,6 +104,7 @@ internal static class Phase4DesktopSmoke
         }
         finally { dialog.Close(); }
         await VerifyPhase5ReliabilityA1Async(main, check);
+        await VerifyPhase5ReliabilityA2Async(main, check);
         main.TestPipelineFactory = null;
     }
     static async Task WheelAsync(Action<string, bool> check)
@@ -165,7 +166,8 @@ internal static class Phase4DesktopSmoke
     {
         readonly Channel<AsrResult> channel = Channel.CreateUnbounded<AsrResult>(); internal AsrConfiguration? Config { get; private set; }
         public IAsrSession CreateSession(AsrConfiguration configuration) { Config = configuration; return this; }
-        internal void Emit(string id, string text, string language) => channel.Writer.TryWrite(new(id, 1, text, true, TimeSpan.Zero, TimeSpan.FromSeconds(1), language));
+        internal void Emit(string id, string text, string language, int startMs = 0, int durationMs = 1000) =>
+            channel.Writer.TryWrite(new(id, 1, text, true, TimeSpan.FromMilliseconds(startMs), TimeSpan.FromMilliseconds(startMs + durationMs), language));
         public Task ConnectAsync(CancellationToken token) => Task.CompletedTask;
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken token) => Task.CompletedTask;
         public IAsyncEnumerable<AsrResult> GetResultsAsync(CancellationToken token) => channel.Reader.ReadAllAsync(token);
@@ -276,6 +278,132 @@ internal static class Phase4DesktopSmoke
         check("100 start stop cycles complete cleanly without unhandled exceptions", cyclesOk && !main.TestRunning);
 
         main.TestPipelineFactory = null;
+    }
+
+    internal static async Task VerifyPhase5ReliabilityA2Async(MainWindow main, Action<string, bool> check)
+    {
+        var asr = new FixtureAsr();
+        var translator = new ControllableFixtureTranslator();
+        main.TestPipelineFactory = (settings, store) =>
+            new CaptionPipeline(new FixtureAudio(), asr, translator, settings, store);
+
+        await main.TestStartAsync();
+        await Idle(main);
+
+        // 1. Korean spacing in desktop UI
+        asr.Emit("k1", "안녕하세요", "ko", startMs: 0, durationMs: 400);
+        await translator.WaitForCountAsync(1);
+        translator.Complete(0, "안녕하세요");
+
+        asr.Emit("k2", "반갑습니다.", "ko", startMs: 500, durationMs: 600);
+        await translator.WaitForCountAsync(2);
+        translator.Complete(1, "반갑습니다.");
+
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            if (main.TestVisibleParagraphs.Any(p => p.Source.Contains("안녕하세요 반갑습니다.") && p.Translation.Contains("안녕하세요 반갑습니다.")))
+                break;
+        }
+
+        var korParagraphs = main.TestVisibleParagraphs;
+        check("desktop UI preserves space between Korean words",
+            korParagraphs.Any(p => p.Source.Contains("안녕하세요 반갑습니다.") && p.Translation.Contains("안녕하세요 반갑습니다.")));
+
+        // 2. Ghost translation cleanup on empty correction
+        asr.Emit("ghost-1", "Ghost audio", "en", startMs: 3000, durationMs: 500);
+        await translator.WaitForCountAsync(3);
+        translator.Complete(2, "幽灵译文");
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            if (main.TestTarget.Contains("幽灵译文") || main.TestVisibleParagraphs.Any(p => p.Translation.Contains("幽灵译文")))
+                break;
+        }
+
+        check("ghost translation visible before correction",
+            main.TestTarget.Contains("幽灵译文") || main.TestVisibleParagraphs.Any(p => p.Translation.Contains("幽灵译文")));
+
+        // Now ASR emits empty correction for ghost-1
+        var session = main.TestStore.CurrentSession;
+        main.TestStore.ApplySource(session, new AsrResult("ghost-1", 2, "", true, TimeSpan.FromMilliseconds(3000), TimeSpan.FromMilliseconds(3500), "en"));
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            if (!main.TestTarget.Contains("幽灵译文") && !main.TestVisibleParagraphs.Any(p => p.Translation.Contains("幽灵译文")))
+                break;
+        }
+
+        check("desktop UI removes ghost translation when source is corrected to empty",
+            !main.TestTarget.Contains("幽灵译文") && !main.TestVisibleParagraphs.Any(p => p.Translation.Contains("幽灵译文")));
+
+        // 3. Translation failure, error display, and retry button interaction
+        asr.Emit("fail-1", "Sentence needing retry", "en", startMs: 6000, durationMs: 500);
+        await translator.WaitForCountAsync(4);
+        translator.Fail(3, "network timeout");
+
+        SubtitleParagraph? errParagraph = null;
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            errParagraph = main.TestVisibleParagraphs.FirstOrDefault(p => p.SegmentId == "fail-1");
+            if (errParagraph is { HasError: true })
+                break;
+        }
+
+        check("translation failure renders error text and retry state in desktop UI",
+            errParagraph != null && errParagraph.HasError && errParagraph.CanRetry && errParagraph.ErrorDisplay.Contains("失败"));
+
+        // Trigger retry
+        main.RetryTranslation(errParagraph!.SessionId, errParagraph.SegmentId, errParagraph.Revision);
+        await translator.WaitForCountAsync(5);
+        translator.Complete(4, "重试成功的完美译文");
+
+        SubtitleParagraph? retriedParagraph = null;
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(50);
+            await Idle(main);
+            retriedParagraph = main.TestVisibleParagraphs.FirstOrDefault(p => p.SegmentId == "fail-1");
+            if (retriedParagraph is { HasError: false } && retriedParagraph.Translation.Contains("重试成功的完美译文"))
+                break;
+        }
+
+        check("retry clears error and displays successful translation in desktop UI",
+            retriedParagraph != null && !retriedParagraph.HasError && retriedParagraph.Translation.Contains("重试成功的完美译文"));
+
+        await main.TestStopCaptureAsync();
+        await Idle(main);
+        main.TestPipelineFactory = null;
+    }
+
+    sealed class ControllableFixtureTranslator : ITranslationProvider
+    {
+        readonly List<TaskCompletionSource<string>> _requests = [];
+        public Task<string> TranslateAsync(TranslationRequest request, CancellationToken token)
+        {
+            lock (_requests)
+            {
+                var t = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _requests.Add(t);
+                return t.Task;
+            }
+        }
+        public void Complete(int index, string value) { lock (_requests) _requests[index].TrySetResult(value); }
+        public void Fail(int index, string err = "local failure") { lock (_requests) _requests[index].TrySetException(new IOException(err)); }
+        public async Task WaitForCountAsync(int count)
+        {
+            using var c = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            for (;;)
+            {
+                lock (_requests) if (_requests.Count >= count) return;
+                await Task.Delay(5, c.Token);
+            }
+        }
     }
 
     sealed class DelayedFinalFixtureAsr(int delayMs, string id, string text) : IAsrProvider, IAsrSession

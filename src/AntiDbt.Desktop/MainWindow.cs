@@ -108,6 +108,7 @@ public sealed class MainWindow : Window
     {
         persistSettings = !testMode;
         settings = LanguageSettings.Upgrade(settings);
+        Resources["BoolToVis"] = new BooleanToVisibilityConverter();
         DesktopTheme.Apply(this, settings.Theme, settings.BackgroundOpacity);
 
         Title = "antiDBT · 实时双语字幕";
@@ -755,7 +756,7 @@ public sealed class MainWindow : Window
         var rows = store.Snapshot();
         var text = SubtitleProjection.Compact(rows);
         source.Text = text.Source.Length > 0 ? text.Source : "系统播放的语音将实时显示在这里";
-        target.Text = text.Translation.Length > 0 ? text.Translation : (rows.Count > 0 ? "" : "译文将在下方显示");
+        target.Text = text.Source.Length > 0 && text.Translation.Length > 0 ? text.Translation : (rows.Count > 0 ? "" : "译文将在下方显示");
 
         compact.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         history.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -791,7 +792,7 @@ public sealed class MainWindow : Window
             });
     }
 
-    static DataTemplate ParagraphTemplate(double size, double line, bool showSource)
+    DataTemplate ParagraphTemplate(double size, double line, bool showSource)
     {
         var panel = new FrameworkElementFactory(typeof(StackPanel));
         panel.SetValue(StackPanel.MarginProperty, new Thickness(2, 4, 2, 4));
@@ -808,13 +809,49 @@ public sealed class MainWindow : Window
             text.SetValue(TextBox.FontSizeProperty, s);
             text.SetValue(TextBlock.LineHeightProperty, line);
             text.SetValue(TextBox.TextWrappingProperty, TextWrapping.Wrap);
+            if (property == nameof(SubtitleParagraph.Translation))
+                text.SetBinding(TextBox.OpacityProperty, new System.Windows.Data.Binding(nameof(SubtitleParagraph.TranslationOpacity)));
             text.SetResourceReference(TextBox.ForegroundProperty, property == nameof(SubtitleParagraph.Source) ? "Muted" : "Ink");
             panel.AppendChild(text);
         }
         if (showSource)
             Add(nameof(SubtitleParagraph.Source), size * 0.85, Brushes.Gray);
         Add(nameof(SubtitleParagraph.Translation), size, Brushes.White);
+
+        var errorPanel = new FrameworkElementFactory(typeof(StackPanel));
+        errorPanel.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+        errorPanel.SetValue(StackPanel.MarginProperty, new Thickness(0, 2, 0, 0));
+        errorPanel.SetBinding(StackPanel.VisibilityProperty, new System.Windows.Data.Binding(nameof(SubtitleParagraph.HasError)) { Converter = (System.Windows.Data.IValueConverter)FindResource("BoolToVis") });
+
+        var errText = new FrameworkElementFactory(typeof(TextBlock));
+        errText.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(SubtitleParagraph.ErrorDisplay)));
+        errText.SetValue(TextBlock.FontSizeProperty, 11.5);
+        errText.SetValue(TextBlock.ForegroundProperty, new SolidColorBrush(Color.FromRgb(229, 115, 115)));
+        errText.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+        errorPanel.AppendChild(errText);
+
+        var retryBtn = new FrameworkElementFactory(typeof(Button));
+        retryBtn.SetValue(Button.ContentProperty, "重试");
+        retryBtn.SetValue(Button.FontSizeProperty, 11d);
+        retryBtn.SetValue(Button.PaddingProperty, new Thickness(6, 1, 6, 1));
+        retryBtn.SetValue(Button.MarginProperty, new Thickness(6, 0, 0, 0));
+        retryBtn.SetValue(Button.VerticalAlignmentProperty, VerticalAlignment.Center);
+        retryBtn.AddHandler(Button.ClickEvent, new RoutedEventHandler((sender, _) =>
+        {
+            if (sender is FrameworkElement fe && fe.DataContext is SubtitleParagraph p && p.CanRetry)
+                RetryTranslation(p.SessionId, p.SegmentId, p.Revision);
+        }));
+        errorPanel.AppendChild(retryBtn);
+
+        panel.AppendChild(errorPanel);
         return new() { VisualTree = panel };
+    }
+
+    internal bool RetryTranslation(long session, string segmentId, int revision)
+    {
+        if (pipeline is not null && !pipeline.Completion.IsCompleted)
+            return pipeline.RetryTranslation(session, segmentId, revision);
+        return false;
     }
 
     void ScrollBottom()
@@ -946,6 +983,7 @@ public sealed class MainWindow : Window
     internal string TestSource => source.Text;
     internal string TestTarget => target.Text;
     internal int TestHistoryCount => history.Items.Count;
+    internal IReadOnlyList<SubtitleParagraph> TestVisibleParagraphs => paragraphs.ToArray();
     internal bool TestFollowing => follow;
     internal ScrollViewer? TestScroller => FindScroller(history);
     internal double TestCompactOffset => Math.Max(sourceViewport.VerticalOffset, FindScroller(history)?.VerticalOffset ?? 0);

@@ -44,14 +44,49 @@ try {
             [string]$Category,
             [string]$ExePath,
             [string[]]$Arguments,
-            [string]$LogName
+            [string]$LogName,
+            [int]$TimeoutSeconds = 60
         )
         Write-Host "Running $Name [$Category]..." -ForegroundColor Yellow
         $logFile = Join-Path $fullArtifactsDir $LogName
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        & dotnet $ExePath @Arguments *> $logFile
-        $exitCode = $LASTEXITCODE
+
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = "dotnet"
+        $allArgs = @($ExePath) + $Arguments
+        $psi.Arguments = [string]::Join(' ', $allArgs)
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Write-Host "  -> $Name TIMEOUT after ${TimeoutSeconds}s! Terminating process tree..." -ForegroundColor Red
+            try { & taskkill.exe /PID $proc.Id /T /F | Out-Null } catch { $proc.Kill($true) }
+            $sw.Stop()
+            $timeoutMsg = "Suite $Name timed out after $TimeoutSeconds seconds"
+            Set-Content -LiteralPath $logFile -Value $timeoutMsg
+            $suiteResults.Add([PSCustomObject]@{
+                Name = $Name
+                Category = $Category
+                Passed = $false
+                ExitCode = -1
+                DurationSeconds = [Math]::Round($sw.Elapsed.TotalSeconds, 3)
+                Log = $LogName
+            })
+            throw $timeoutMsg
+        }
+
         $sw.Stop()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        Set-Content -LiteralPath $logFile -Value ($stdout + "`n" + $stderr)
+        $exitCode = $proc.ExitCode
 
         $passed = ($exitCode -eq 0)
         $color = if ($passed) { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
@@ -96,9 +131,46 @@ try {
     $desktopDir = Join-Path $fullArtifactsDir "desktop-smoke"
     New-Item -ItemType Directory -Path $desktopDir -Force | Out-Null
     $desktopExe = "$taskRoot/src/AntiDbt.Desktop/bin/Debug/net9.0-windows/antiDBT.exe"
+    $desktopLog = Join-Path $desktopDir "desktop-console.log"
     $desktopSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $desktopProc = Start-Process -FilePath $desktopExe -ArgumentList '--smoke-test', $desktopDir -WindowStyle Hidden -Wait -PassThru
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $desktopExe
+    $psi.Arguments = "--smoke-test `"$desktopDir`""
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $desktopProc = [System.Diagnostics.Process]::Start($psi)
+    $stdoutTask = $desktopProc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $desktopProc.StandardError.ReadToEndAsync()
+
+    # Bounded wait with 60s timeout
+    $timeoutMs = 60000
+    $completed = $desktopProc.WaitForExit($timeoutMs)
+    if (-not $completed) {
+        Write-Host "  -> Desktop.Smoke TIMEOUT after $($timeoutMs/1000)s! Terminating process tree..." -ForegroundColor Red
+        try { & taskkill.exe /PID $desktopProc.Id /T /F | Out-Null } catch { $desktopProc.Kill($true) }
+        $desktopSw.Stop()
+        $timeoutMsg = "Desktop Smoke timed out after $($timeoutMs/1000) seconds"
+        Set-Content -LiteralPath (Join-Path $desktopDir "desktop-smoke-error.txt") -Value $timeoutMsg
+        $suiteResults.Add([PSCustomObject]@{
+            Name = "Desktop.Smoke"
+            Category = "WpfAutomation"
+            Passed = $false
+            ExitCode = -1
+            DurationSeconds = [Math]::Round($desktopSw.Elapsed.TotalSeconds, 3)
+            Log = "desktop-smoke/desktop-smoke.json"
+        })
+        throw $timeoutMsg
+    }
+
     $desktopSw.Stop()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    Set-Content -LiteralPath $desktopLog -Value ($stdout + "`n" + $stderr)
+
     $desktopPassed = ($desktopProc.ExitCode -eq 0)
     $desktopColor = if ($desktopPassed) { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
     Write-Host "  -> Desktop.Smoke: $(if ($desktopPassed) {'PASS'} else {'FAIL (code ' + $desktopProc.ExitCode + ')'}) ($([Math]::Round($desktopSw.Elapsed.TotalSeconds, 2))s)" -ForegroundColor $desktopColor
@@ -110,7 +182,12 @@ try {
         DurationSeconds = [Math]::Round($desktopSw.Elapsed.TotalSeconds, 3)
         Log = "desktop-smoke/desktop-smoke.json"
     })
-    if (-not $desktopPassed) { throw "Desktop Smoke failed with exit code $($desktopProc.ExitCode)" }
+    if (-not $desktopPassed) {
+        $errFile = Join-Path $desktopDir "desktop-smoke-error.txt"
+        $errDetails = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { $stderr }
+        Write-Host "  Desktop Smoke Error Details:`n$errDetails" -ForegroundColor Red
+        throw "Desktop Smoke failed with exit code $($desktopProc.ExitCode). Details: $errDetails"
+    }
 
     # 8. Diagnostics & Optional Soak / Tone
     Run-Suite -Name "Diagnostics.Performance" -Category "SyntheticPerformance" -ExePath "tests/AntiDbt.Diagnostics/bin/Debug/net9.0-windows/AntiDbt.Diagnostics.dll" -Arguments @() -LogName "diagnostics-performance.log"

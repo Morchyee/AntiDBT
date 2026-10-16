@@ -231,6 +231,26 @@ public sealed class CaptionPipeline : IAsyncDisposable
             _translations.Schedule(segment);
         }
     }
+    public bool RetryTranslation(long session, string segmentId, int revision)
+    {
+        if (session != Store.CurrentSession)
+            return false;
+        CaptionSegment? target = null;
+        foreach (var row in Store.Snapshot())
+        {
+            if (row.SessionId == session && row.SegmentId == segmentId && row.Revision == revision && row.IsFinal)
+            {
+                target = row;
+                break;
+            }
+        }
+        if (target is null || string.IsNullOrWhiteSpace(target.SourceText))
+            return false;
+        if (!Store.ClearTranslationError(session, segmentId, revision))
+            return false;
+        _translations.Schedule(target with { TranslationError = null });
+        return true;
+    }
     public Task StopAsync(CancellationToken token) => StopAsync(StopReason.UserStop, token);
     public async Task StopAsync(StopReason reason = StopReason.UserStop, CancellationToken token = default)
     {

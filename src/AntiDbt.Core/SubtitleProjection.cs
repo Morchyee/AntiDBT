@@ -1,6 +1,19 @@
 namespace AntiDbt.Core;
 
-public sealed record SubtitleParagraph(string Source, string Translation, bool TranslationPending = false);
+public sealed record SubtitleParagraph(
+    string Source,
+    string Translation,
+    bool TranslationPending = false,
+    string? TranslationError = null,
+    long SessionId = 0,
+    string SegmentId = "",
+    int Revision = 0,
+    bool CanRetry = false)
+{
+    public bool HasError => !string.IsNullOrEmpty(TranslationError);
+    public string ErrorDisplay => string.IsNullOrEmpty(TranslationError) ? "" : $"⚠️ 翻译异常: {TranslationError}";
+    public double TranslationOpacity => TranslationPending ? 0.65 : 1.0;
+}
 
 public static class SubtitleProjection
 {
@@ -46,13 +59,32 @@ public static class SubtitleProjection
         }
         if (group.Count > 0)
             result.Add(Join(group));
-        return result.Where(x => x.Source.Length > 0 || x.Translation.Length > 0).ToArray();
+        return result.Where(x => !string.IsNullOrWhiteSpace(x.Source)).ToArray();
     }
 
-    private static SubtitleParagraph Join(IEnumerable<CaptionSegment> rows) => new(
-        JoinTexts(rows.Select(x => x.SourceText)),
-        JoinTexts(rows.Select(x => x.TranslationText.Length > 0 ? x.TranslationText : x.ProvisionalTranslationText)),
-        rows.Any(x => x.TranslationText.Length == 0 && x.SourceText.Length > 0));
+    private static SubtitleParagraph Join(IEnumerable<CaptionSegment> rows)
+    {
+        var list = rows as IList<CaptionSegment> ?? rows.ToList();
+        var last = list.Count > 0 ? list[^1] : null;
+        var hasPending = list.Any(x => x.TranslationText.Length == 0 && !string.IsNullOrWhiteSpace(x.SourceText) && string.IsNullOrEmpty(x.TranslationError));
+        var firstError = list.FirstOrDefault(x => !string.IsNullOrEmpty(x.TranslationError))?.TranslationError;
+        var canRetry = list.Any(x => !string.IsNullOrEmpty(x.TranslationError) && x.IsFinal);
+
+        var source = JoinTexts(list.Select(x => x.SourceText));
+        var translation = string.IsNullOrWhiteSpace(source)
+            ? ""
+            : JoinTexts(list.Select(x => string.IsNullOrWhiteSpace(x.SourceText) ? "" : (x.TranslationText.Length > 0 ? x.TranslationText : x.ProvisionalTranslationText)));
+
+        return new(
+            source,
+            translation,
+            hasPending,
+            firstError,
+            last?.SessionId ?? 0,
+            last?.SegmentId ?? "",
+            last?.Revision ?? 0,
+            canRetry);
+    }
 
     public static bool ShouldStartNewParagraph(CaptionSegment current, CaptionSegment previous, int currentGroupLength)
     {
@@ -103,28 +135,34 @@ public static class SubtitleProjection
             return false;
 
         if (IsCjkPunctuation(last))
-            return char.IsAsciiLetterOrDigit(first);
+            return char.IsAsciiLetterOrDigit(first) || IsHangul(first);
 
         if (IsCjkPunctuation(first))
             return false;
 
-        if (IsCjkChar(last) && IsCjkChar(first))
+        // Chinese / Japanese kanji & kana join without space
+        if (IsHanOrKana(last) && IsHanOrKana(first))
             return false;
 
-        if (IsCjkChar(last) && IsCjkPunctuation(first))
+        if (IsHanOrKana(last) && IsCjkPunctuation(first))
             return false;
 
-        if (IsCjkPunctuation(last) && IsCjkChar(first))
+        if (IsCjkPunctuation(last) && IsHanOrKana(first))
             return false;
 
+        // Hangul (Korean) words join with spaces
         return true;
     }
 
-    private static bool IsCjkChar(char c) =>
+    private static bool IsHanOrKana(char c) =>
         (c >= 0x4E00 && c <= 0x9FFF) ||
         (c >= 0x3400 && c <= 0x4DBF) ||
-        (c >= 0x3040 && c <= 0x30FF) ||
-        (c >= 0xAC00 && c <= 0xD7AF);
+        (c >= 0x3040 && c <= 0x30FF);
+
+    private static bool IsHangul(char c) =>
+        (c >= 0xAC00 && c <= 0xD7AF) ||
+        (c >= 0x1100 && c <= 0x11FF) ||
+        (c >= 0x3130 && c <= 0x318F);
 
     private static bool IsCjkPunctuation(char c) =>
         c is '。' or '，' or '！' or '？' or '、' or '；' or '：' or '“' or '”' or '‘' or '’' or '（' or '）' or '《' or '》' or '【' or '】' or '…' or '—';

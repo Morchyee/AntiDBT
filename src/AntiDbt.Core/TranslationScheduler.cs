@@ -118,7 +118,7 @@ public sealed class TranslationScheduler : IAsyncDisposable
                         }
                         attempt.Token.ThrowIfCancellationRequested();
                         if (!store.ApplyTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text))
-                            store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, text);
+                            store.ApplyProvisionalTranslation(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, text);
                     }
                     catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested) { }
                     catch (OperationCanceledException) when (!token.IsCancellationRequested)

@@ -190,6 +190,112 @@ await TestAsync("same revision Final upgrade preempts preview",async()=>{
     try{await p.WaitForCountAsync(2);p.Complete(1,"final");await scheduler.FlushAsync(CancellationToken.None);Check(s.Snapshot().Single().TranslationText=="final","same revision Final dropped");}
     finally{p.Complete(0,"obsolete");}
 });
+
+Test("Korean space preservation between words and no space in CJK Han", () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    s.ApplySource(n, Speech("오늘은", id: "1", start: 0));
+    s.ApplyTranslation(n, "1", 1, "오늘은");
+    s.ApplySource(n, Speech("좋은 날입니다.", id: "2", start: 500));
+    s.ApplyTranslation(n, "2", 1, "좋은 날입니다.");
+    var p = SubtitleProjection.Expanded(s.Snapshot());
+    Check(p.Count == 1, "continuous speech should form 1 paragraph");
+    Check(p[0].Source == "오늘은 좋은 날입니다.", "Korean words should be separated by space");
+    Check(p[0].Translation == "오늘은 좋은 날입니다.", "Korean translation words should be separated by space");
+
+    var sHan = new SubtitleStore();
+    var nHan = sHan.BeginSession();
+    sHan.ApplySource(nHan, Speech("你好", id: "1", start: 0));
+    sHan.ApplyTranslation(nHan, "1", 1, "你好");
+    sHan.ApplySource(nHan, Speech("世界", id: "2", start: 500));
+    sHan.ApplyTranslation(nHan, "2", 1, "世界");
+    var pHan = SubtitleProjection.Expanded(sHan.Snapshot());
+    Check(pHan[0].Source == "你好世界", "Han characters should not have space between them");
+    Check(pHan[0].Translation == "你好世界", "Han translation characters should not have space between them");
+});
+
+Test("empty correction completely clears source and ghost translation in compact and expanded", () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    s.ApplySource(n, Speech("Ghost audio", id: "1"));
+    s.ApplyTranslation(n, "1", 1, "幽灵译文");
+    s.ApplySource(n, Speech("", 2, id: "1"));
+    var snap = s.Snapshot();
+    var compact = SubtitleProjection.Compact(snap);
+    Check(compact.Source == "", "source should be empty");
+    Check(compact.Translation == "", "translation should be empty without ghost text");
+    var expanded = SubtitleProjection.Expanded(snap);
+    Check(expanded.Count == 0, "empty segment should not produce visible paragraph in expanded view");
+});
+
+Test("semantic revision mismatch clears provisional draft and rejects incompatible late draft", () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    s.ApplySource(n, Speech("turn left", id: "1"));
+    s.ApplyTranslation(n, "1", 1, "向左转");
+    Check(s.Snapshot()[0].TranslationText == "向左转", "translation not applied");
+
+    s.ApplySource(n, Speech("turn right", 2, id: "1"));
+    Check(s.Snapshot()[0].TranslationText == "" && s.Snapshot()[0].ProvisionalTranslationText == "", "incompatible revision did not clear provisional draft");
+
+    Check(!s.ApplyProvisionalTranslation(n, "1", 1, "turn left", "向左转"), "incompatible late draft was accepted");
+    Check(s.Snapshot()[0].ProvisionalTranslationText == "", "provisional text contaminated by incompatible draft");
+
+    s.ApplySource(n, Speech("turn left again", 3, id: "1"));
+    s.ApplyTranslation(n, "1", 3, "再次向左转");
+    s.ApplySource(n, Speech("turn left again and stop", 4, id: "1"));
+    Check(s.Snapshot()[0].ProvisionalTranslationText == "再次向左转", "compatible prefix extension should preserve draft");
+});
+
+await TestAsync("translation failure sets error state and retry succeeds", async () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    var p = new ControlledTranslator();
+    await using var scheduler = new TranslationScheduler(s, p, new() { DebounceMilliseconds = 0 }, "zh");
+    scheduler.Schedule(s.ApplySource(n, Speech("troubled sentence", id: "1", final: true))!);
+    await p.WaitForCountAsync(1);
+    p.Fail(0);
+    await scheduler.FlushAsync(CancellationToken.None);
+
+    var snap = s.Snapshot();
+    Check(snap[0].TranslationError != null, "translation error was not recorded");
+    var paragraphs = SubtitleProjection.Expanded(snap);
+    Check(paragraphs.Count == 1 && paragraphs[0].HasError && paragraphs[0].CanRetry, "paragraph error or retry state missing");
+
+    s.ClearTranslationError(n, "1", 1);
+    Check(s.Snapshot()[0].TranslationError == null, "clear error failed");
+    scheduler.Schedule(s.Snapshot()[0]);
+    await p.WaitForCountAsync(2);
+    p.Complete(1, "重试成功");
+    await scheduler.FlushAsync(CancellationToken.None);
+    Check(s.Snapshot()[0].TranslationText == "重试成功" && s.Snapshot()[0].TranslationError == null, "retry translation did not succeed");
+});
+
+await TestAsync("newer revision cancels and preempts translation retry", async () => {
+    var s = new SubtitleStore();
+    var n = s.BeginSession();
+    var p = new ControlledTranslator();
+    await using var scheduler = new TranslationScheduler(s, p, new() { DebounceMilliseconds = 0 }, "zh");
+    scheduler.Schedule(s.ApplySource(n, Speech("first", id: "1", final: true))!);
+    await p.WaitForCountAsync(1);
+    p.Fail(0);
+    await scheduler.FlushAsync(CancellationToken.None);
+
+    Check(s.Snapshot()[0].TranslationError != null, "first attempt not failed");
+
+    scheduler.Schedule(s.Snapshot()[0]);
+    await p.WaitForCountAsync(2);
+
+    scheduler.Schedule(s.ApplySource(n, Speech("second revision", 2, id: "1", final: true))!);
+    await p.WaitForCountAsync(3);
+
+    p.Complete(2, "第二版译文");
+    p.Fail(1);
+    await scheduler.FlushAsync(CancellationToken.None);
+
+    Check(s.Snapshot()[0].TranslationText == "第二版译文", "newer revision did not prevail over retry");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;
