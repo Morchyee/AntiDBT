@@ -57,6 +57,139 @@ public sealed class TranslationScheduler : IAsyncDisposable
         return null;
     }
 
+    private static readonly HashSet<string> s_trailingConjunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "and", "or", "but", "so", "for", "nor", "yet", "because", "although", "though",
+        "while", "whereas", "if", "unless", "since", "as", "after", "before", "once",
+        "supposing", "provided", "providing"
+    };
+
+    private static readonly HashSet<string> s_trailingPrepositions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "with", "for", "to", "in", "on", "at", "by", "from", "about", "into",
+        "through", "during", "between", "under", "over", "without", "per", "of",
+        "against", "among", "toward", "towards", "upon", "within", "like"
+    };
+
+    private static readonly HashSet<string> s_trailingAuxiliaries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "is", "are", "was", "were", "am", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did",
+        "will", "would", "shall", "should", "can", "could", "may", "might", "must"
+    };
+
+    private static readonly HashSet<string> s_trailingDeterminers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "this", "that", "these", "those",
+        "my", "your", "his", "her", "its", "our", "their", "each", "every", "some", "any"
+    };
+
+    private static readonly HashSet<string> s_trailingSubordinators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "which", "who", "whom", "whose", "whether", "where", "when", "whenever", "wherever", "how", "why"
+    };
+
+    private static readonly HashSet<string> s_trailingPronouns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "we", "i", "you", "he", "she", "it", "they"
+    };
+
+    public static bool IsIncompleteClause(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0) return false;
+        char lastChar = trimmed[^1];
+        if (lastChar is '.' or '?' or '!' or '。' or '？' or '！') return false;
+        if (lastChar is ',' or ';' or ':' or '-' or '…') return true;
+
+        var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0) return false;
+
+        var lastWord = words[^1].Trim(',', ';', ':', '-', '\"', '\'').ToLowerInvariant();
+        if (s_trailingConjunctions.Contains(lastWord)) return true;
+        if (s_trailingPrepositions.Contains(lastWord)) return true;
+        if (s_trailingAuxiliaries.Contains(lastWord)) return true;
+        if (s_trailingDeterminers.Contains(lastWord)) return true;
+        if (s_trailingSubordinators.Contains(lastWord)) return true;
+        if (words.Length >= 2 && s_trailingPronouns.Contains(lastWord)) return true;
+
+        return false;
+    }
+
+    private readonly HashSet<(long SessionId, string SegmentId)> _retranslated = new();
+    private readonly HashSet<(long SessionId, string SegmentId)> _translatedWithLookahead = new();
+
+    private void TryTriggerContextualRevision(CaptionSegment current)
+    {
+        if (!settings.EnableContextAwareTranslation || settings.ContextSentences == 0) return;
+        var snapshot = store.Snapshot();
+        var previous = snapshot.LastOrDefault(x => x.SessionId == current.SessionId && x.IsFinal && x.ReceivedTimestamp < current.ReceivedTimestamp);
+        if (previous is null || !IsIncompleteClause(previous.SourceText)) return;
+        lock (sync)
+        {
+            if (disposed || _translatedWithLookahead.Contains((previous.SessionId, previous.SegmentId)) || !_retranslated.Add((previous.SessionId, previous.SegmentId))) return;
+        }
+
+        bool supportsContext = settings.Provider is "DeepL" or "GroqLlm" or "OpenAiCompatible";
+        var revisionJob = new Job(previous);
+        var revisionTask = Task.Run(async () =>
+        {
+            try
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(settings.TimeoutSeconds, 1, 30)));
+                await AcquireSlotAsync(revisionJob, deadline.Token);
+                try
+                {
+                    if (!supportsContext)
+                    {
+                        string combinedSource = previous.SourceText + " " + current.SourceText;
+                        var req = new TranslationRequest(previous.SessionId, previous.SegmentId, previous.Revision, combinedSource, previous.Language, target, Array.Empty<string>());
+                        string combinedTranslation = await provider.TranslateAsync(req, deadline.Token);
+                        if (!string.IsNullOrWhiteSpace(combinedTranslation))
+                        {
+                            store.AssignTranslationDisplayGroup(previous.SessionId, new[] { previous.SegmentId, current.SegmentId }, combinedTranslation);
+                            CaptionDiagnostics.Record("semantic", "display-group-applied", previous.SessionId, previous.SegmentId, previous.Revision,
+                                sourceLength: combinedSource.Length, translationLength: combinedTranslation.Length, detail: current.SegmentId,
+                                sourceText: combinedSource, translationText: combinedTranslation);
+                        }
+                    }
+                    else
+                    {
+                        var prevContext = store.Snapshot().Where(x => x.SessionId == previous.SessionId && x.IsFinal && x.ReceivedTimestamp < previous.ReceivedTimestamp)
+                            .TakeLast(Math.Clamp(settings.ContextSentences, 0, 12)).Select(x => x.SourceText).ToArray();
+                        var req = new TranslationRequest(previous.SessionId, previous.SegmentId, previous.Revision, previous.SourceText, previous.Language, target, prevContext, current.SourceText);
+                        string revised = await provider.TranslateAsync(req, deadline.Token);
+                        if (!string.IsNullOrWhiteSpace(revised))
+                        {
+                            store.ApplyTranslation(previous.SessionId, previous.SegmentId, previous.Revision, revised);
+                            CaptionDiagnostics.Record("semantic", "contextual-revision-applied", previous.SessionId, previous.SegmentId, previous.Revision,
+                                sourceLength: previous.SourceText.Length, translationLength: revised.Length, detail: $"triggeredBy={current.SegmentId}",
+                                sourceText: previous.SourceText, translationText: revised, lookahead: current.SourceText);
+                        }
+                    }
+                }
+                finally
+                {
+                    ReleaseSlot();
+                }
+            }
+            catch (Exception ex)
+            {
+                CaptionDiagnostics.Record("semantic", "revision-failed", previous.SessionId, previous.SegmentId, previous.Revision, detail: ex.Message);
+            }
+        });
+
+        lock (sync)
+        {
+            if (!disposed)
+            {
+                tasks.Add(revisionTask);
+                _ = revisionTask.ContinueWith(done => { lock (sync) tasks.Remove(done); }, TaskScheduler.Default);
+            }
+        }
+    }
+
     public LatencyMonitor RequestLatency { get; } = new();
     public event Action<string>? Error;
     public TranslationScheduler(SubtitleStore store, ITranslationProvider provider, TranslationConfiguration settings, string target, PipelineTelemetryCollector? telemetry = null)
@@ -69,6 +202,14 @@ public sealed class TranslationScheduler : IAsyncDisposable
     }
     public void Schedule(CaptionSegment segment)
     {
+        var actual = store.Snapshot().FirstOrDefault(x => x.SessionId == segment.SessionId && x.SegmentId == segment.SegmentId);
+        if (actual is null || actual.Revision != segment.Revision ||
+            actual.TranslationText.Length > 0 && actual.TranslationRevision == actual.Revision)
+            return;
+        if (segment.IsFinal)
+        {
+            TryTriggerContextualRevision(segment);
+        }
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
@@ -117,7 +258,27 @@ public sealed class TranslationScheduler : IAsyncDisposable
                 {
                     // A fixed coalescing window never restarts on each incoming interim event.
                     if (!segment.IsFinal)
+                    {
                         await Task.Delay(Math.Clamp(settings.DebounceMilliseconds, 0, 2000), attempt.Token);
+                    }
+                    else if (settings.EnableContextAwareTranslation && IsIncompleteClause(segment.SourceText))
+                    {
+                        int waitMs = settings.DebounceMilliseconds == 0 ? 0 : Math.Clamp(settings.SemanticWaitMilliseconds, 200, 1000);
+                        var nextSeg = store.Snapshot().FirstOrDefault(x => x.SessionId == segment.SessionId && x.ReceivedTimestamp > segment.ReceivedTimestamp && !string.IsNullOrWhiteSpace(x.SourceText));
+                        if (nextSeg is null && waitMs > 0)
+                        {
+                            CaptionDiagnostics.Record("semantic", "wait-for-lookahead", segment.SessionId, segment.SegmentId, segment.Revision,
+                                detail: $"waitMs={waitMs}", sourceText: segment.SourceText);
+                            try
+                            {
+                                await Task.Delay(waitMs, attempt.Token);
+                            }
+                            catch (OperationCanceledException) when (attempt.IsCancellationRequested && !token.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                        }
+                    }
                     await AcquireSlotAsync(job, attempt.Token);
                     try
                     {
@@ -168,7 +329,21 @@ public sealed class TranslationScheduler : IAsyncDisposable
                         }
                         var context = store.Snapshot().Where(x => x.SessionId == segment.SessionId && x.IsFinal && x.ReceivedTimestamp < segment.ReceivedTimestamp && x.SegmentId != segment.SegmentId)
                             .TakeLast(Math.Clamp(settings.ContextSentences, 0, 12)).Select(x => x.SourceText).ToArray();
-                        var key = segment.Language + "\0" + target + "\0" + segment.SourceText + "\0" + string.Join("\u001f", context);
+
+                        string? lookahead = null;
+                        if (settings.EnableContextAwareTranslation)
+                        {
+                            var nextSeg = store.Snapshot().FirstOrDefault(x => x.SessionId == segment.SessionId && x.ReceivedTimestamp > segment.ReceivedTimestamp && !string.IsNullOrWhiteSpace(x.SourceText));
+                            if (nextSeg is not null)
+                            {
+                                lookahead = nextSeg.SourceText;
+                                lock (sync) _translatedWithLookahead.Add((segment.SessionId, segment.SegmentId));
+                                CaptionDiagnostics.Record("semantic", "lookahead-acquired", segment.SessionId, segment.SegmentId, segment.Revision,
+                                    detail: nextSeg.SegmentId, sourceText: segment.SourceText, lookahead: lookahead);
+                            }
+                        }
+
+                        var key = segment.Language + "\0" + target + "\0" + segment.SourceText + "\0" + string.Join("\u001f", context) + "\0" + (lookahead ?? "");
                         string? text;
                         lock (sync)
                             cache.TryGetValue(key, out text);
@@ -199,16 +374,24 @@ public sealed class TranslationScheduler : IAsyncDisposable
                                 Interlocked.Decrement(ref outstandingRequests);
                                 throw new IOException("Translation plugin did not release requests.");
                             }
+                            CaptionDiagnostics.Record("translation", "request-dispatched", segment.SessionId, segment.SegmentId, segment.Revision,
+                                sourceLength: segment.SourceText.Length, detail: $"contextCount={context.Length};hasLookahead={lookahead != null}",
+                                sourceText: segment.SourceText, context: string.Join(" \u2223 ", context), lookahead: lookahead);
                             Task<string> request;
                             try
                             {
-                                request = provider.TranslateAsync(new(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, segment.Language, target, context), deadline.Token);
+                                request = provider.TranslateAsync(new(segment.SessionId, segment.SegmentId, segment.Revision, segment.SourceText, segment.Language, target, context, lookahead), deadline.Token);
                             }
                             catch { Interlocked.Decrement(ref outstandingRequests); throw; }
                             _ = request.ContinueWith(t => { Interlocked.Decrement(ref outstandingRequests); if (t.IsFaulted) _ = t.Exception; }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                             text = await request.WaitAsync(deadline.Token);
+                            if (string.IsNullOrWhiteSpace(text))
+                                throw new IOException("Translation service returned empty text.");
                             var serviceMs = Stopwatch.GetElapsedTime(began).TotalMilliseconds;
                             RequestLatency.Record(TimeSpan.FromMilliseconds(serviceMs));
+                            CaptionDiagnostics.Record("translation", "response-received", segment.SessionId, segment.SegmentId, segment.Revision,
+                                sourceLength: segment.SourceText.Length, translationLength: text.Length,
+                                sourceText: segment.SourceText, translationText: text);
                             telemetry?.Record(new SegmentTelemetryRecord
                             {
                                 SessionId = segment.SessionId,
@@ -237,6 +420,9 @@ public sealed class TranslationScheduler : IAsyncDisposable
                     }
                     catch (OperationCanceledException)
                     {
+                        if (!attempt.IsCancellationRequested && !token.IsCancellationRequested &&
+                            store.ApplyTranslationError(segment.SessionId, segment.SegmentId, segment.Revision, "翻译请求超时"))
+                            Error?.Invoke("翻译请求超时，请检查服务或重试");
                         telemetry?.Record(new SegmentTelemetryRecord
                         {
                             SessionId = segment.SessionId,

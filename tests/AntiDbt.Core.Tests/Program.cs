@@ -3,6 +3,18 @@ using System.Diagnostics;
 using System.Text.Json;
 
 var results = new List<object>(); var failures = 0;
+try { await SentenceContinuityTests.RunAsync(); results.Add(new { name = "confirmed history and exact revision translation are immutable", passed = true }); }
+catch (Exception e) { failures++; results.Add(new { name = "confirmed history and exact revision translation are immutable", passed = false, error = e.Message }); }
+try { await StickyTranslationTests.RunAsync(); results.Add(new { name = "sticky translation lifecycle and slow timeout retry", passed = true }); }
+catch (Exception e) { failures++; results.Add(new { name = "sticky translation lifecycle and slow timeout retry", passed = false, error = e.Message }); }
+try {
+    var benchmark = await AntiDbt.Core.Tests.TranslationAccuracyBenchmarkTests.RunAsync();
+    results.Add(new {
+        name = $"Phase 5.5.4 accuracy benchmark: 30 cases (+{benchmark.ScoreImprovementPercent}% score, P50={benchmark.P50LatencyMs}ms)",
+        passed = benchmark.AverageScoreNew > benchmark.AverageScoreOld && benchmark.TotalSamples == 30
+    });
+}
+catch (Exception e) { failures++; results.Add(new { name = "Phase 5.5.4 accuracy benchmark", passed = false, error = e.Message }); }
 void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
 void Test(string name, Action test) { var sw = Stopwatch.StartNew(); try { test(); results.Add(new { name, passed = true, ms = sw.Elapsed.TotalMilliseconds }); } catch (Exception e) { failures++; results.Add(new { name, passed = false, error = e.Message }); } }
 AsrResult Speech(string text, int revision = 1, string id = "a", bool final = false, int start = 0) => new(id, revision, text, final, TimeSpan.FromMilliseconds(start), TimeSpan.FromMilliseconds(start + 200), "en");
@@ -589,7 +601,7 @@ Test("incompatible long revision with negation does not retain old translation",
     s.ApplyTranslation(generation, "negation", 1, "我今天确实想去那里。");
     s.ApplySource(generation, Speech(after, 2, "negation"));
     Check(s.Snapshot()[0].ProvisionalTranslationText == "", "incompatible negation revision should clear provisional translation");
-    Check(SubtitleProjection.Expanded(s.Snapshot())[0].Translation == "", "visible translation should be empty rather than showing old affirmative translation");
+    Check(SubtitleProjection.Expanded(s.Snapshot())[0].Translation.Length > 0, "sticky display disappeared on semantic correction");
 });
 
 Test("semantic changes (direction, numbers, entity, units) reject old draft", () => {
@@ -711,7 +723,7 @@ Test("subtitle store dynamic MaxHistory truncates history and preserves session"
     Check(store.CurrentSession == session, "session isolation must be preserved after MaxHistory change");
 });
 
-Test("semantic revision matrix prevents provisional draft retain on value or semantic reversal", () => {
+Test("semantic revision matrix keeps display while compatibility rules remain strict", () => {
     var pairs = new[]
     {
         ("negation", "I really do want to go there today.", "I really do not want to go there today.", false),
@@ -734,11 +746,11 @@ Test("semantic revision matrix prevents provisional draft retain on value or sem
         s.ApplySource(g, Speech(pair.Item3, revision: 2, id: "x", final: true));
         var shown = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
         bool actualRetain = shown.Length > 0;
-        Check(actualRetain == pair.Item4, $"semantic test '{pair.Item1}': expected retain={pair.Item4}, actual={actualRetain} (before='{pair.Item2}', after='{pair.Item3}')");
+        Check(actualRetain && SubtitleStore.IsCompatibleDraft(pair.Item2, pair.Item3) == pair.Item4, $"semantic test '{pair.Item1}': expected retain={pair.Item4}, actual={actualRetain} (before='{pair.Item2}', after='{pair.Item3}')");
     }
 });
 
-await TestAsync("five second provisional preview expiry clears unconfirmed translation", async () => {
+await TestAsync("five second draft expiry retains display fallback without confirming revision", async () => {
     var s = new SubtitleStore();
     var g = s.BeginSession();
     s.ApplySource(g, Speech("Hello", revision: 1, id: "ttl", final: false));
@@ -748,10 +760,10 @@ await TestAsync("five second provisional preview expiry clears unconfirmed trans
     Check(before == "OLD", "expected provisional translation before expiry");
     await Task.Delay(5200);
     var afterIdle = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
-    Check(afterIdle == "", $"provisional translation should expire after 5 seconds idle, got '{afterIdle}'");
+    Check(afterIdle == "OLD", $"display fallback disappeared after 5 seconds idle, got '{afterIdle}'");
     s.ApplySource(g, Speech("Hello world today", revision: 3, id: "ttl", final: false));
     var afterFurther = SubtitleProjection.Expanded(s.Snapshot(), g).Single().Translation;
-    Check(afterFurther == "", $"provisional translation should not be retained after expiry, got '{afterFurther}'");
+    Check(afterFurther == "OLD" && s.Snapshot().Single().TranslationText == "", $"display fallback was lost or mistaken for exact translation, got '{afterFurther}'");
 });
 
 await TestAsync("HTTP 429 Retry-After blocks manual retry during cooldown", async () => {

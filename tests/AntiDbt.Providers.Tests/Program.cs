@@ -92,6 +92,7 @@ await Check("Groq Whisper dropped jobs accurately counted under backpressure", a
 });
 await ReviewCases.Run(address, Check);
 await app.StopAsync(); await app.DisposeAsync();
+await Check("Hybrid sentence atomic handoff preserves queued future PCM and late cloud identity", HybridSentenceTests.RunAsync);
 await Check("SherpaOnnx rejects nonexistent model directory", async () => {
     var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = Path.Combine(Path.GetTempPath(), "nonexistent_sherpa_" + Guid.NewGuid().ToString("N")) };
     var provider = new SherpaOnnxStreamingAsrProvider();
@@ -217,12 +218,13 @@ await Check("HybridStreamingAsr correlates local partials and cloud final to exa
     await foreach (var r in session.GetResultsAsync(limit.Token))
         results.Add(r);
 
-    Assert(results.Count == 3, $"expected 3 results but got {results.Count}");
+    Assert(results.Count == 4, $"expected local and cloud Final results, got {results.Count}");
     Assert(results.All(r => r.SegmentId == "hybrid-1"), "all results must share the exact same SegmentId hybrid-1");
-    Assert(results.Select(r => r.Revision).SequenceEqual(new[] { 1, 2, 3 }), "revisions must increment monotonically");
+    Assert(results.Select(r => r.Revision).SequenceEqual(new[] { 1, 2, 3, 4 }), "revisions must increment monotonically");
     Assert(!results[0].IsFinal && results[0].Text == "hello", "first result is partial hello");
     Assert(!results[1].IsFinal && results[1].Text == "hello world", "second result is partial hello world");
-    Assert(results[2].IsFinal && results[2].Text == "Hello, world!", "final result is cloud replaced high-accuracy final");
+    Assert(results[2].IsFinal && results[2].Text == "hello world", "local Final must be immediate");
+    Assert(results[3].IsFinal && results[3].Text == "Hello, world!", "cloud correction must use a higher revision on the same segment");
 });
 
 await Check("HybridStreamingAsr falls back to local text when cloud fails", async () => {

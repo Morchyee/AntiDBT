@@ -1,5 +1,8 @@
 # antiDBT · 独立实时双语字幕客户端
 
+本地英文 ASR 完整版包含 Sherpa-ONNX Zipformer 20M int8 模型，无需 Groq Key、SDK、Python 或 Go。[完整中文部署教程](docs/LOCAL_ASR_SETUP.zh-CN.md)。中文翻译需另行配置 MT 服务。
+
+
 <p align="center">
   <b>极简 · 低延迟 · 高度自定义的 Windows 桌面实时双语字幕工具</b><br>
   <sub>独立开源复刻项目 · 不依赖任何特定厂商私有接口 · 支持多 Provider 自由组合</sub>
@@ -14,8 +17,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/.NET-9.0-512BD4.svg?logo=dotnet" alt=".NET 9.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.3--beta-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
+  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>

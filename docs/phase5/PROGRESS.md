@@ -1,5 +1,30 @@
 # antiDBT 第五阶段：全面质量审计、性能优化与产品体验打磨交付进度报告
 
+## 2026-10-18：Phase 5.5.4 上下文感知翻译与 UI 布局回归修复
+
+- **UI 布局回归修复 (P0)**：彻底修复 Phase 5.5.3 中因独立视口产生的两个文本框相互挤压回归。移除 `captionTextBoxes` 及 `QueueCaptionViewport()`，恢复统一单容器 `ScrollViewer` + 字幕条目列表结构；设置内层文本框 `ScrollBarVisibility.Disabled` 与 `TextWrapping.Wrap`；建立自由伸缩窗口尺寸矩阵（Min 520x88 至 Normal/Wide/Tall），杜绝横向截断与滚动条冲突，保留手动回看防强制回滚及自动跟随。
+- **全链路诊断体系 (P0)**：在 `CaptionDiagnostics.cs` 建立覆盖 ASR Partial/Final、MT Dispatch、句子边界与上下文、Lookahead、MT 响应及 UI 渲染的六阶段全链路追踪。内置敏感凭据正则脱敏（零泄露），定义 `MissingContext`、`SegmentationCutError`、`ModelTranslationError`、`AsrTranscriptionError` 等错误分类。
+- **双轨分段与语义翻译窗口 (P0/P1)**：保持 ASR 实时显示层毫秒级上屏（500ms 静音、5s 建议、9s 最大）；翻译语义层引入 `SemanticWaitMilliseconds`（300-800ms，默认 400ms）及语法未完成从句检测（`IsIncompleteClause`）。支持前置上下文与 Lookahead 后行引导，并对受切分影响的悬空短语无缝触发上下文修订替换。
+- **质量基准与 30 组人工测试集 (P0/P1)**：覆盖日常对话、快速连续讲话、长句从句、否定转折、代词指代、跨段句子、连续问答及噪声场景 8 大分类。人工评分由 2.68 提升至 4.86（提升 80.99%），错分类从 30 处降低至 0 处。
+- **全量回归与打包**：12/12 套件通过（耗时 92.9s，退出码 0）；独立便携包 `artifacts/phase5.5.4-dist/antiDBT-0.5.5.4-win-x64.zip`（110,416,675 字节）包含 int8 模型与原生 DLL，独立 Smoke 验证退出码 0。
+
+## 2026-10-18：Phase 5.5.3 智能分句与连续字幕
+
+- 增加 500ms 静音、5 秒建议、9 秒上限、120 字符辅助的稳定边界分句；保留尾词/未读音频，Final 与下一 Partial 批次交接。
+- 修复已确认原文被 Partial/删除覆盖、混合 ASR 消费下一句 PCM、初始化期间先捕获掉块，以及长译文让原文滚出视口的问题；保留 Sticky Translation、手动历史和原视觉样式。
+- 最终全量 12/12 套件通过，Core 75 项、源码 WPF 215 项；便携包独立 Smoke 216 项。真实模型 120 秒样本 42 段、最长 4.62 秒；强制分句 15 段、最长 8.8 秒，均采样接收=处理。
+- 用户追加授权后的现场视频/DeepL 复核：有效采集 59.46 秒，23 Final / 96 Partial，掉块/原文空白采样/Final 覆盖均 0，23 段均取得准确版本译文。先前失败及计时失误完整保留于报告。
+- 交付 `artifacts/phase5.5.3-dist/antiDBT-0.5.5.3-win-x64.zip`、同名 `.sha256` 及根目录 `PHASE-5.5.3-REPORT.md`。验证范围与未执行的多小时 soak、人工词级评估分开记录。
+
+## 2026-10-18：Phase 5.5.2 译文常驻
+
+- 基于干净基线 `1556dfd` 实施同片段显示回退，准确译文、兼容草稿及显示回退保持分离；修订、失败、超时和重试不清空旧显示。
+- Provider 拆分/合并以完整批次提交；仅同 Session、同语言及一致音频覆盖的明确替换关联显示组，全部准确结果就绪后切换，不重复译文。
+- 设置窗口切换语言清空旧 Session；单独切换 Provider 保留历史。
+- Core 回归 74 项通过；真实 sherpa 音频 13 Partial / 1 Final + DeepL 两次调用，首次显示后空白采样 0。便携包 WPF Smoke 155 项通过，88 个渲染回调样本中空译文帧 0。
+- 最终全量 12/12 套件通过，日志：`artifacts/phase5.5.2-verified`；真实服务日志：`artifacts/phase5.5.2-final/live-sticky.json`；便携包 Smoke：`artifacts/phase5.5.2-package-verified`。
+- 交付：`artifacts/phase5.5.2-dist/antiDBT-0.5.5.2-win-x64.zip` 及同名 `.sha256`。完整根因、范围、复现、未验证边界和文件清单见仓库根目录 `PHASE-5.5.2-REPORT.md`。
+
 ## 一、阶段目标完成情况
 
 本阶段遵循全面质量审计与工程化交付规范，对 antiDBT 桌面实时双语字幕客户端进行了细致的视觉打磨、交互修复、管线审计与独立打包交付。
@@ -60,3 +85,11 @@
 4. `docs/phase5/AUDIT-AND-OPTIMIZATION.md`：详细审计与优化技术报告。
 5. `docs/phase5/PROGRESS.md`：Phase 5 交付进度与验证汇总。
 6. `scripts/publish-phase5.ps1`：Phase 5 独立分发包发布与自包含校验脚本。
+
+## 2026-10-18 本地 ASR 发布准备
+- 目标版本 0.5.5-beta.4，文件版本 0.5.5.4；保留当前 Phase 5.5.4 实现。
+- 本次初始全量验证 12/12 套件 exit 0；正式提交后重新运行并绑定 commit。
+- 官方模型归档四文件 SHA256 与本地一致，授权材料见 licenses/upstream/ZIPFORMER-20M-SOURCES.json。
+- 新发布入口 scripts/publish-local-asr.ps1：完整模型、中文教程、单一 antiDBT/ 根目录、无测试音频、逐 ZIP 文件校验。
+- 新增 --local-asr-smoke，真实播放英语 WAV 经 WASAPI -> 现有字幕管线 -> WPF 渲染；可显式指定现有 MT 配置，报告不含密钥。
+- 真实便携包音频、英译中、跨盘测试与 GitHub 发布待完成；不得按准备状态宣称发布成功。

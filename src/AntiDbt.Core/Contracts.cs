@@ -4,9 +4,13 @@ namespace AntiDbt.Core;
 
 public sealed record AudioChunk(byte[] Pcm, TimeSpan AudioStart, TimeSpan AudioDuration, long CapturedTimestamp);
 public sealed record AsrResult(string SegmentId, int Revision, string Text, bool IsFinal,
-    TimeSpan AudioStart, TimeSpan AudioEnd, string? Language = null, bool IsDeleted = false);
+    TimeSpan AudioStart, TimeSpan AudioEnd, string? Language = null, bool IsDeleted = false)
+{
+    // First event of an atomic provider reconciliation; subsequent events retain their normal shape.
+    public int BatchSize { get; init; } = 1;
+}
 public sealed record TranslationRequest(long SessionId, string SegmentId, int Revision, string Text,
-    string SourceLanguage, string TargetLanguage, IReadOnlyList<string> Context);
+    string SourceLanguage, string TargetLanguage, IReadOnlyList<string> Context, string? Lookahead = null);
 
 public enum StopReason
 {
@@ -62,6 +66,8 @@ public sealed record TranslationConfiguration
     public int TimeoutSeconds { get; init; } = 30;
     public int DebounceMilliseconds { get; init; } = 350;
     public int ContextSentences { get; init; } = 4;
+    public int SemanticWaitMilliseconds { get; init; } = 400;
+    public bool EnableContextAwareTranslation { get; init; } = true;
 }
 public sealed record AppSettings
 {

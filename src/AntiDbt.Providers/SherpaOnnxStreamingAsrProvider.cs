@@ -28,22 +28,24 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
         private readonly CancellationTokenSource _cts = new();
         private readonly object _gate = new();
 
-        private OnlineRecognizer? _recognizer;
+        private TimedSherpaRecognizer? _recognizer;
         private OnlineStream? _stream;
         private Task? _worker;
         private bool _connected;
         private bool _completed;
         private bool _disposed;
 
-        private string _currentSegmentId = Guid.NewGuid().ToString("N");
-        private int _currentRevision;
-        private TimeSpan _currentSegmentStart = TimeSpan.Zero;
+        private readonly SentenceConfiguration _sentenceSettings;
+        private StreamingSentenceManager? _sentences;
+        private long _acceptedSamples, _processedSamples;
+        public long AcceptedSamples => Interlocked.Read(ref _acceptedSamples);
+        public long ProcessedSamples => Interlocked.Read(ref _processedSamples);
         private TimeSpan _processedAudioTime = TimeSpan.Zero;
-        private string _lastReportedText = "";
 
         public Session(AsrConfiguration config)
         {
             _config = config;
+            _sentenceSettings = SentenceConfiguration.From(config);
         }
 
         public static string ResolveModelDirectory(AsrConfiguration config)
@@ -173,10 +175,12 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
 
             if (float.TryParse(config.Options.GetValueOrDefault("rule1TrailingSilence", "2.4"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r1))
                 recognizerConfig.Rule1MinTrailingSilence = r1;
-            if (float.TryParse(config.Options.GetValueOrDefault("rule2TrailingSilence", "1.2"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r2))
+            if (float.TryParse(config.Options.GetValueOrDefault("rule2TrailingSilence", "0.5"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r2))
                 recognizerConfig.Rule2MinTrailingSilence = r2;
-            if (float.TryParse(config.Options.GetValueOrDefault("rule3UtteranceLength", "20.0"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r3))
-                recognizerConfig.Rule3MinUtteranceLength = r3;
+            var sentenceSettings = SentenceConfiguration.From(config);
+            if (float.TryParse(config.Options.GetValueOrDefault("rule3UtteranceLength", "9.0"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r3) && float.IsFinite(r3) && r3 > 0)
+                recognizerConfig.Rule3MinUtteranceLength = Math.Min(r3, (float)sentenceSettings.MaximumSeconds);
+            else recognizerConfig.Rule3MinUtteranceLength = (float)sentenceSettings.MaximumSeconds;
 
             return recognizerConfig;
         }
@@ -193,8 +197,9 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
                 try
                 {
                     var config = BuildConfig(_config);
-                    _recognizer = new OnlineRecognizer(config);
+                    _recognizer = new TimedSherpaRecognizer(config);
                     _stream = _recognizer.CreateStream();
+                    _sentences = new(_sentenceSettings, _config.Language, !string.IsNullOrWhiteSpace(config.ModelConfig.Transducer.Joiner));
                     _connected = true;
                     _worker = Task.Run(() => ProcessLoopAsync(_cts.Token), CancellationToken.None);
                 }
@@ -226,15 +231,19 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
             if (pcm.Length == 0)
                 return;
 
-            int numSamples = pcm.Length / 2;
-            var floatSamples = new float[numSamples];
-            for (int i = 0; i < numSamples; i++)
+            // Bound decoder scheduling to 100ms even if a caller submits a multi-second block.
+            for (int offset = 0; offset < pcm.Length; offset += 3200)
             {
-                short s = BinaryPrimitives.ReadInt16LittleEndian(pcm.Span.Slice(i * 2, 2));
-                floatSamples[i] = s / 32768f;
+                int numSamples = Math.Min(3200, pcm.Length - offset) / 2;
+                var floatSamples = new float[numSamples];
+                for (int i = 0; i < numSamples; i++)
+                {
+                    short s = BinaryPrimitives.ReadInt16LittleEndian(pcm.Span.Slice(offset + i * 2, 2));
+                    floatSamples[i] = s / 32768f;
+                }
+                await _audioChannel.Writer.WriteAsync(floatSamples, cancellationToken);
+                Interlocked.Add(ref _acceptedSamples, numSamples);
             }
-
-            await _audioChannel.Writer.WriteAsync(floatSamples, cancellationToken);
         }
 
         public async IAsyncEnumerable<AsrResult> GetResultsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
@@ -273,103 +282,61 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
             {
                 var recognizer = _recognizer;
                 var stream = _stream;
-                if (recognizer == null || stream == null)
-                    return;
-
+                var sentences = _sentences;
+                if (recognizer is null || stream is null || sentences is null) return;
+                long silentSamples = 0;
+                async Task EmitAsync(bool finished = false)
+                {
+                    var raw = recognizer.GetResult(stream);
+                    var update = sentences.Observe(raw.Text, _processedAudioTime,
+                        TimeSpan.FromSeconds((double)silentSamples / 16000), recognizer.IsEndpoint(stream), finished, raw.WordStarts);
+                    foreach (var result in update.Results)
+                        await _resultsChannel.Writer.WriteAsync(result, token);
+                    if (update.ResetRecognizer && !finished)
+                    {
+                        // sherpa transducer Reset preserves encoder context and unread features.
+                        // Do not recreate the stream, discard a PCM queue, or replay duplicate audio.
+                        recognizer.Reset(stream);
+                        silentSamples = 0;
+                        CaptionDiagnostics.Record("asr", "native-reset", detail: update.Boundary, audioEnd: _processedAudioTime.TotalSeconds);
+                    }
+                }
                 await foreach (var samples in _audioChannel.Reader.ReadAllAsync(token))
                 {
+                    for (int offset = 0; offset < samples.Length; offset += 320)
+                    {
+                        int length = Math.Min(320, samples.Length - offset);
+                        double energy = 0;
+                        for (int i = offset; i < offset + length; i++) energy += samples[i] * samples[i];
+                        if (Math.Sqrt(energy / length) < _sentenceSettings.VadThreshold) silentSamples += length;
+                        else silentSamples = 0;
+                    }
                     stream.AcceptWaveform(16000, samples);
-                    _processedAudioTime += TimeSpan.FromSeconds((double)samples.Length / 16000);
-
-                    while (recognizer.IsReady(stream) && !token.IsCancellationRequested)
+                    Interlocked.Add(ref _processedSamples, samples.Length);
+                    _processedAudioTime = TimeSpan.FromSeconds((double)ProcessedSamples / 16000);
+                    while (recognizer.IsReady(stream))
                     {
+                        token.ThrowIfCancellationRequested();
                         recognizer.Decode(stream);
                     }
-
-                    bool isEndpoint = recognizer.IsEndpoint(stream);
-                    var rawResult = recognizer.GetResult(stream);
-                    var text = TextNormalizer.NormalizeAsrText(rawResult?.Text ?? "");
-
-                    if (isEndpoint)
-                    {
-                        if (!string.IsNullOrEmpty(text))
-                        {
-                            _currentRevision++;
-                            var finalResult = new AsrResult(
-                                _currentSegmentId,
-                                _currentRevision,
-                                text,
-                                IsFinal: true,
-                                _currentSegmentStart,
-                                _processedAudioTime,
-                                _config.Language);
-
-                            await _resultsChannel.Writer.WriteAsync(finalResult, token);
-                        }
-
-                        recognizer.Reset(stream);
-                        _currentSegmentStart = _processedAudioTime;
-                        _currentSegmentId = Guid.NewGuid().ToString("N");
-                        _currentRevision = 0;
-                        _lastReportedText = "";
-                    }
-                    else if (!string.IsNullOrEmpty(text) && text != _lastReportedText)
-                    {
-                        _currentRevision++;
-                        _lastReportedText = text;
-                        var partialResult = new AsrResult(
-                            _currentSegmentId,
-                            _currentRevision,
-                            text,
-                            IsFinal: false,
-                            _currentSegmentStart,
-                            _processedAudioTime,
-                            _config.Language);
-
-                        await _resultsChannel.Writer.WriteAsync(partialResult, token);
-                    }
+                    await EmitAsync();
                 }
-
-                // Audio stream completed, drain final tokens if not cancelled
-                if (!token.IsCancellationRequested)
+                token.ThrowIfCancellationRequested();
+                // Decode model lookahead at EOF; padding is NOT counted as captured audio.
+                stream.AcceptWaveform(16000, new float[9600]);
+                stream.InputFinished();
+                while (recognizer.IsReady(stream))
                 {
-                    stream.InputFinished();
-                    while (recognizer.IsReady(stream) && !token.IsCancellationRequested)
-                    {
-                        recognizer.Decode(stream);
-                    }
-
-                    var finalDrain = recognizer.GetResult(stream);
-                    var remainingText = TextNormalizer.NormalizeAsrText(finalDrain?.Text ?? "");
-                    if (!string.IsNullOrEmpty(remainingText))
-                    {
-                        _currentRevision++;
-                        var finalResult = new AsrResult(
-                            _currentSegmentId,
-                            _currentRevision,
-                            remainingText,
-                            IsFinal: true,
-                            _currentSegmentStart,
-                            _processedAudioTime,
-                            _config.Language);
-
-                        await _resultsChannel.Writer.WriteAsync(finalResult, token);
-                    }
+                    token.ThrowIfCancellationRequested();
+                    recognizer.Decode(stream);
                 }
+                await EmitAsync(true);
+                CaptionDiagnostics.Record("asr", "audio-drained", detail: $"accepted={AcceptedSamples};processed={ProcessedSamples}", audioEnd: _processedAudioTime.TotalSeconds);
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                // Surface unexpected worker failures
-                _resultsChannel.Writer.TryComplete(ex);
-                return;
-            }
-            finally
-            {
-                _resultsChannel.Writer.TryComplete();
-            }
+            catch (Exception ex) { _resultsChannel.Writer.TryComplete(ex); }
+            finally { _resultsChannel.Writer.TryComplete(); }
         }
-
         public async ValueTask DisposeAsync()
         {
             lock (_gate)

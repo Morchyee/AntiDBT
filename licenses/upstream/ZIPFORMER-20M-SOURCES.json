@@ -1,0 +1,29 @@
+{
+  "license": "Apache-2.0",
+  "archiveSha256": "9C559283E8498D3FE95913C79CA1CB454BB26281AC2B102B41306C7D752765D9",
+  "files": [
+    {
+      "matchesOfficialArchive": true,
+      "sha256": "3810755CE7C3AB26B42A8BCF39D191308FA27FB0F53358823BA46141D03B7EB3",
+      "file": "encoder-epoch-99-avg-1.int8.onnx"
+    },
+    {
+      "matchesOfficialArchive": true,
+      "sha256": "21E2A2ACD961B3AC72F55BE2F10F1A285E1B0B0BA010D7C0B6EAB141411B163C",
+      "file": "decoder-epoch-99-avg-1.int8.onnx"
+    },
+    {
+      "matchesOfficialArchive": true,
+      "sha256": "E085D73B593CF9B0707F370DBD656D58327D3FE36D80D849202EF81DF02CB01E",
+      "file": "joiner-epoch-99-avg-1.int8.onnx"
+    },
+    {
+      "matchesOfficialArchive": true,
+      "sha256": "49E3C2646595FD907228B3C6787069658F67B17377C60AEB8619C4551B2316FB",
+      "file": "tokens.txt"
+    }
+  ],
+  "modelCard": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/blob/main/README.md",
+  "archiveUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
+  "archiveNoticeFiles": []
+}

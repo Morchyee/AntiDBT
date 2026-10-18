@@ -66,6 +66,7 @@ internal static class ReviewCases
             foreach(var result in results) store.ApplySource(session,result);
             var rows=store.Snapshot();
             Assert(results.Count(x=>x.IsDeleted)==3,"split and merge must delete replaced provisional suffix");
+            Assert(results.Count(x => x.BatchSize > 1) == 2 && results.Where(x => x.BatchSize > 1).All(x => x.BatchSize == 3), "split/merge must expose complete atomic reconciliation batches");
             Assert(rows.Count==1 && rows[0].SourceText=="hello world" && rows[0].IsFinal && rows[0].AudioStart==TimeSpan.FromMilliseconds(10),"no stale split rows");
         });
         await check("review unchanged provisional prefix survives suffix split",async()=> { var results=await Gather("suffix"); var stable=results.Where(x=>x.Text=="stable").ToArray(); Assert(stable.Length==2 && stable.Select(x=>x.SegmentId).Distinct().Count()==1 && results.Count(x=>x.IsDeleted)==1,"unchanged provisional prefix identity"); });

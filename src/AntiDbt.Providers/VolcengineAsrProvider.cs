@@ -331,6 +331,8 @@ public sealed class VolcengineAsrProvider : IAsrProvider
             }
             provisional.Clear();
             provisional.AddRange(next);
+            if (output.Count > 1 && output.Any(x => x.IsDeleted))
+                output[0] = output[0] with { BatchSize = output.Count };
             return output;
         }
         public async ValueTask DisposeAsync()

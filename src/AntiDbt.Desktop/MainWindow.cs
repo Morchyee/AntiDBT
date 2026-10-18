@@ -127,6 +127,7 @@ public sealed class MainWindow : Window
         Title = UiText.AppTitle;
         Width = 680;
         MinWidth = 520;
+        MinHeight = 88;
         MaxWidth = 2400;
         SizeToContent = SizeToContent.Height;
         MaxHeight = 1600;
@@ -405,6 +406,8 @@ public sealed class MainWindow : Window
                     history.MaxHeight = double.PositiveInfinity;
                     history.Height = double.NaN;
                 }
+                if (follow)
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, ScrollBottom);
             }
         };
 
@@ -506,11 +509,14 @@ public sealed class MainWindow : Window
         store.MaxHistory = newSettings.MaxHistory > 0 ? newSettings.MaxHistory : 2000;
         var wasRunning = pipeline is not null && !pipeline.Completion.IsCompleted;
         var pipelineChanged = HasPipelineConfigChanged(settings, newSettings);
+        var languageChanged = settings.SourceLanguage != newSettings.SourceLanguage ||
+            settings.Asr.Language != newSettings.Asr.Language || settings.TargetLanguage != newSettings.TargetLanguage;
         if (pipelineChanged)
         {
             if (wasRunning)
             {
                 await StopCaptureCoreAsync(StopReason.Reconfigure);
+                if (languageChanged) store.BeginSession();
                 settings = newSettings;
                 UiText.CurrentLanguage = settings.UiLanguage;
                 ApplyTheme();
@@ -533,6 +539,7 @@ public sealed class MainWindow : Window
             }
             else
             {
+                if (languageChanged) store.BeginSession();
                 settings = newSettings;
                 UiText.CurrentLanguage = settings.UiLanguage;
                 ApplyTheme();
@@ -1004,6 +1011,10 @@ public sealed class MainWindow : Window
             historyFont = size;
             historyShowSource = settings.ShowSource;
         }
+        CaptionDiagnostics.Record("ui", "render", store.CurrentSession, text.SegmentId, text.Revision,
+            text.Source.Length, text.Translation.Length, rows.Count,
+            $"expanded={expanded};follow={follow};history={history.Visibility};paragraphs={paragraphs.Count};offset={FindScroller(history)?.VerticalOffset:F1}",
+            sourceText: text.Source, translationText: text.Translation);
 
         if (follow)
             Dispatcher.BeginInvoke(DispatcherPriority.Loaded, ScrollBottom);
@@ -1037,6 +1048,8 @@ public sealed class MainWindow : Window
             text.SetValue(TextBox.FontSizeProperty, s);
             text.SetValue(TextBlock.LineHeightProperty, line);
             text.SetValue(TextBox.TextWrappingProperty, TextWrapping.Wrap);
+            text.SetValue(TextBox.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+            text.SetValue(TextBox.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
             if (property == nameof(SubtitleParagraph.Translation))
                 text.SetBinding(TextBox.OpacityProperty, new System.Windows.Data.Binding(nameof(SubtitleParagraph.TranslationOpacity)));
             text.SetResourceReference(TextBox.ForegroundProperty, property == nameof(SubtitleParagraph.Source) ? "Muted" : "Ink");

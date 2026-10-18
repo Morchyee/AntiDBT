@@ -162,10 +162,11 @@ public static class SubtitleProjection
         var length = 0;
         foreach (var row in rows.Reverse())
         {
-            if (next is not null && (row.SessionId != next.SessionId ||
+            bool sameReplacement = row.TranslationDisplayGroup is not null && row.TranslationDisplayGroup == next?.TranslationDisplayGroup;
+            if (!sameReplacement && next is not null && (row.SessionId != next.SessionId ||
                 StopwatchSeconds(next.ReceivedTimestamp - row.ReceivedTimestamp) >= 5))
                 break;
-            if (next is not null && EndsSentence(row.SourceText))
+            if (!sameReplacement && next is not null && EndsSentence(row.SourceText))
                 break;
             tail.Add(row);
             length += row.SourceText.Length;
@@ -215,16 +216,9 @@ public static class SubtitleProjection
         var source = JoinTexts(list.Select(x => x.SourceText));
         var translation = string.IsNullOrWhiteSpace(source)
             ? ""
-            : JoinTexts(list.Select(x =>
-            {
-                if (string.IsNullOrWhiteSpace(x.SourceText))
-                    return "";
-                if (x.TranslationText.Length > 0)
-                    return x.TranslationText;
-                if (x.TranslatedTimestamp is not null && Stopwatch.GetElapsedTime(x.TranslatedTimestamp.Value) >= TimeSpan.FromSeconds(5))
-                    return "";
-                return x.ProvisionalTranslationText;
-            }));
+            : JoinTexts(list.Select(x => x.DisplayTranslation));
+        CaptionDiagnostics.Record("projection", source.Length == 0 ? "empty" : "projected", target?.SessionId ?? 0,
+            target?.SegmentId ?? "", target?.Revision ?? 0, source.Length, translation.Length, list.Count);
 
         return new(
             source,
@@ -241,6 +235,8 @@ public static class SubtitleProjection
     {
         if (current.SessionId != previous.SessionId)
             return true;
+        if (current.TranslationDisplayGroup is not null && current.TranslationDisplayGroup == previous.TranslationDisplayGroup)
+            return false;
 
         if (currentGroupLength >= 180)
             return true;

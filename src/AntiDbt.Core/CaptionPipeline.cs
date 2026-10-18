@@ -81,11 +81,11 @@ public sealed class CaptionPipeline : IAsyncDisposable
         bool failed = false;
         int failures = 0;
         bool first = true;
+        bool audioStarted = false;
         try
         {
             Publish(PipelineState.Connecting, "正在启动系统音频采集…");
-            await _audio.StartAsync(token);
-            _capture = CaptureAsync(token);
+
             while (!token.IsCancellationRequested)
             {
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -102,6 +102,13 @@ public sealed class CaptionPipeline : IAsyncDisposable
                     }
                     if (token.IsCancellationRequested)
                         break;
+                    if (!audioStarted)
+                    {
+                        await _audio.StartAsync(token);
+                        _capture = CaptureAsync(token);
+                        audioStarted = true;
+                        CaptionDiagnostics.Record("audio", "capture-after-asr-ready");
+                    }
                     sessionConnectedTimestamp = Stopwatch.GetTimestamp();
                     _translations.CancelPending();
                     var generation = Store.BeginSession(ClearStoreOnStart && first);
@@ -289,50 +296,63 @@ public sealed class CaptionPipeline : IAsyncDisposable
     {
         try
         {
+            var batch = new List<AsrResult>();
+            int batchSize = 1;
             await foreach (var result in session.GetResultsAsync(connection.Token))
             {
                 onResult?.Invoke();
-                if (result.IsDeleted)
+                CaptionDiagnostics.Record("asr", result.IsDeleted ? "delete-output" : string.IsNullOrWhiteSpace(result.Text) ? "empty-output" : result.IsFinal ? "final-output" : "partial-output",
+                    generation, result.SegmentId, result.Revision, result.Text.Length, audioEnd: result.AudioEnd.TotalSeconds, sourceText: result.Text);
+                if (batch.Count == 0) batchSize = Math.Clamp(result.BatchSize, 1, 1024);
+                batch.Add(result);
+                if (batch.Count < batchSize) continue;
+                var applied = batchSize > 1 ? Store.ApplySources(generation, batch) : null;
+                foreach (var change in batch)
                 {
-                    Store.ApplySource(generation, result);
-                    _translations.CancelSegment(generation, result.SegmentId);
-                    continue;
-                }
-                var segment = Store.ApplySource(generation, result);
-                if (segment is null)
-                    continue;
-                long? audioEnd = null;
-                bool isDiscontinuous = false;
-                double? queueWaitMs = null;
-                lock (timelineLock)
-                {
-                    var match = anchors.FirstOrDefault(x => x.End >= result.AudioEnd.TotalSeconds);
-                    if (match.CapturedTimestamp != 0)
+                    if (change.IsDeleted)
                     {
-                        audioEnd = match.CapturedTimestamp - (long)((match.End - result.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
-                        if (match.DequeuedTimestamp > match.CapturedTimestamp)
+                        if (applied is null) Store.ApplySource(generation, change);
+                        _translations.CancelSegment(generation, change.SegmentId);
+                        continue;
+                    }
+                    var segment = applied is null ? Store.ApplySource(generation, change)
+                        : applied.FirstOrDefault(x => x.SegmentId == change.SegmentId && x.Revision == change.Revision);
+                    if (segment is null)
+                        continue;
+                    long? audioEnd = null;
+                    bool isDiscontinuous = false;
+                    double? queueWaitMs = null;
+                    lock (timelineLock)
+                    {
+                        var match = anchors.FirstOrDefault(x => x.End >= change.AudioEnd.TotalSeconds);
+                        if (match.CapturedTimestamp != 0)
                         {
-                            queueWaitMs = Stopwatch.GetElapsedTime(match.CapturedTimestamp, match.DequeuedTimestamp).TotalMilliseconds;
+                            audioEnd = match.CapturedTimestamp - (long)((match.End - change.AudioEnd.TotalSeconds) * Stopwatch.Frequency);
+                            if (match.DequeuedTimestamp > match.CapturedTimestamp)
+                            {
+                                queueWaitMs = Stopwatch.GetElapsedTime(match.CapturedTimestamp, match.DequeuedTimestamp).TotalMilliseconds;
+                            }
+                            if (anchors.Count > 0 && match.Discontinuities != anchors[0].Discontinuities)
+                                isDiscontinuous = true;
                         }
-                        if (anchors.Count > 0 && match.Discontinuities != anchors[0].Discontinuities)
-                            isDiscontinuous = true;
                     }
-                }
-                double? asrMs = null;
-                if (audioEnd is { } timestamp && !isDiscontinuous)
-                {
-                    var elapsed = Stopwatch.GetElapsedTime(timestamp);
-                    if (elapsed >= TimeSpan.Zero)
+                    double? asrMs = null;
+                    if (audioEnd is { } timestamp && !isDiscontinuous)
                     {
-                        AsrLatency.Record(elapsed);
-                        asrMs = elapsed.TotalMilliseconds;
+                        var elapsed = Stopwatch.GetElapsedTime(timestamp);
+                        if (elapsed >= TimeSpan.Zero)
+                        {
+                            AsrLatency.Record(elapsed);
+                            asrMs = elapsed.TotalMilliseconds;
+                        }
                     }
-                }
-                if (asrMs.HasValue || queueWaitMs.HasValue || audioEnd.HasValue)
-                {
-                    segment = segment with { AsrLatencyMs = asrMs, QueueWaitMs = queueWaitMs, AudioCapturedTimestamp = audioEnd };
-                }
-                _translations.Schedule(segment);
+                    if (asrMs.HasValue || queueWaitMs.HasValue || audioEnd.HasValue)
+                    {
+                        segment = segment with { AsrLatencyMs = asrMs, QueueWaitMs = queueWaitMs, AudioCapturedTimestamp = audioEnd };
+                    }
+                    _translations.Schedule(segment);
+                    }
+                batch.Clear();
             }
         }
         catch (Exception)

@@ -46,6 +46,8 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
         readonly object _gate = new();
         readonly List<byte[]> _currentSentencePcm = [];
         int _currentSentencePcmBytes = 0;
+        long _bufferStartSample;
+        readonly SemaphoreSlim _publishGate = new(1, 1);
         const int MaxSentencePcmBytes = 16000 * 2 * 45; // 45s of 16kHz 16-bit mono (~1.44 MB)
 
         IAsrSession? _localSession;
@@ -117,6 +119,8 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                         var dropped = _currentSentencePcm[0];
                         _currentSentencePcm.RemoveAt(0);
                         _currentSentencePcmBytes -= dropped.Length;
+                        _bufferStartSample += dropped.Length / 2;
+                        CaptionDiagnostics.Record("hybrid", "audio-buffer-overflow", detail: $"samples={dropped.Length / 2}");
                     }
                 }
             }
@@ -125,88 +129,78 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                 await _localSession.SendAudioAsync(pcm, cancellationToken);
         }
 
+        private byte[] TakeSentencePcm(TimeSpan end)
+        {
+            long endSample = (long)Math.Round(end.TotalSeconds * 16000);
+            int required = (int)Math.Min(_currentSentencePcmBytes, Math.Max(0, endSample - _bufferStartSample) * 2);
+            var pcm = new byte[required];
+            int copied = 0;
+            while (copied < required)
+            {
+                var first = _currentSentencePcm[0];
+                int take = Math.Min(required - copied, first.Length);
+                first.AsSpan(0, take).CopyTo(pcm.AsSpan(copied));
+                if (take == first.Length) _currentSentencePcm.RemoveAt(0);
+                else _currentSentencePcm[0] = first[take..];
+                copied += take;
+                _currentSentencePcmBytes -= take;
+            }
+            _bufferStartSample += required / 2;
+            return pcm;
+        }
+
+        private async Task PublishResultsAsync(IReadOnlyList<AsrResult> results, CancellationToken token)
+        {
+            if (results.Count == 0) return;
+            await _publishGate.WaitAsync(token);
+            try
+            {
+                for (int i = 0; i < results.Count; i++)
+                    await _results.Writer.WriteAsync(results[i] with { BatchSize = i == 0 ? results.Count : 1 }, token);
+            }
+            finally { _publishGate.Release(); }
+        }
+
         async Task PumpLocalAsync(CancellationToken token)
         {
             try
             {
                 if (_localSession is null) return;
+                var batch = new List<AsrResult>();
+                int expected = 1;
                 await foreach (var res in _localSession.GetResultsAsync(token))
                 {
-                    if (!res.IsFinal)
+                    if (batch.Count == 0) expected = res.BatchSize;
+                    batch.Add(res);
+                    if (batch.Count < expected) continue;
+                    var outgoing = new List<AsrResult>();
+                    var jobs = new List<FinalJob>();
+                    foreach (var change in batch)
                     {
-                        string segId;
-                        int rev;
-                        TimeSpan start, end;
                         lock (_gate)
                         {
-                            segId = _currentSegmentId;
-                            rev = ++_currentRevision;
-                            start = _currentSentenceStart;
-                            end = res.AudioEnd;
-                        }
-
-                        await _results.Writer.WriteAsync(new AsrResult(
-                            segId,
-                            rev,
-                            res.Text,
-                            IsFinal: false,
-                            AudioStart: start,
-                            AudioEnd: end,
-                            Language: res.Language
-                        ), token);
-                    }
-                    else
-                    {
-                        byte[] pcm;
-                        string segId;
-                        int finalRev;
-                        TimeSpan segStart, segEnd;
-                        lock (_gate)
-                        {
-                            pcm = _currentSentencePcm.Count > 0 ? _currentSentencePcm.SelectMany(x => x).ToArray() : [];
-                            _currentSentencePcm.Clear();
-                            _currentSentencePcmBytes = 0;
-                            segId = _currentSegmentId;
-                            finalRev = ++_currentRevision;
-                            segStart = _currentSentenceStart;
-                            segEnd = res.AudioEnd;
-
-                            _segmentCounter++;
-                            _currentSegmentId = $"hybrid-{_segmentCounter}";
+                            string id = _currentSegmentId;
+                            int revision = ++_currentRevision;
+                            var start = _currentSentenceStart;
+                            outgoing.Add(new(id, revision, change.Text, change.IsFinal, start, change.AudioEnd, change.Language));
+                            if (!change.IsFinal) continue;
+                            if (_effectiveCloud is not null || _cloudTranscriber is not null)
+                                jobs.Add(new(id, revision + 1, TakeSentencePcm(change.AudioEnd), start, change.AudioEnd, change.Text, change.Language));
+                            _currentSegmentId = $"hybrid-{++_segmentCounter}";
                             _currentRevision = 0;
-                            _currentSentenceStart = segEnd;
+                            _currentSentenceStart = change.AudioEnd;
                         }
-
-                        if (_effectiveCloud is null && _cloudTranscriber is null)
-                        {
-                            await _results.Writer.WriteAsync(new AsrResult(
-                                segId,
-                                finalRev,
-                                res.Text,
-                                IsFinal: true,
-                                AudioStart: segStart,
-                                AudioEnd: segEnd,
-                                Language: res.Language
-                            ), token);
-                            continue;
-                        }
-
-                        var job = new FinalJob(segId, finalRev, pcm, segStart, segEnd, res.Text, res.Language);
-                        await _finalJobs.Writer.WriteAsync(job, token);
                     }
+                    // Publish Final + next Partial together before any slow cloud correction.
+                    await PublishResultsAsync(outgoing, token);
+                    foreach (var job in jobs) await _finalJobs.Writer.WriteAsync(job, token);
+                    batch.Clear();
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                _results.Writer.TryComplete(ex);
-            }
-            finally
-            {
-                _finalJobs.Writer.TryComplete();
-            }
+            catch (Exception ex) { _results.Writer.TryComplete(ex); }
+            finally { _finalJobs.Writer.TryComplete(); }
         }
-
         private static bool IsWhisperArtifact(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return true;
@@ -291,15 +285,9 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                             finalText = cloudText;
                     }
 
-                    await _results.Writer.WriteAsync(new AsrResult(
-                        job.SegmentId,
-                        job.Revision,
-                        finalText,
-                        IsFinal: true,
-                        AudioStart: job.AudioStart,
-                        AudioEnd: job.AudioEnd,
-                        Language: job.Language
-                    ), token);
+                    if (finalText != job.LocalText)
+                        await PublishResultsAsync(new[] { new AsrResult(job.SegmentId, job.Revision, finalText, true,
+                            job.AudioStart, job.AudioEnd, job.Language) }, token);
                 }
                 _results.Writer.TryComplete();
             }

@@ -29,6 +29,7 @@ internal static class DesktopSmoke
             if (directory.Contains("ui-red", StringComparison.OrdinalIgnoreCase)) await Phase4DesktopSmoke.BaselineWheelAsync(directory);
             window.Show();
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            await SentenceDesktopSmoke.RunAsync(window, directory, Check);
             var store = window.TestStore;
             var generation = store.BeginSession();
             store.ApplySource(generation, new("1", 1, "Live subtitles show the original immediately.", false, TimeSpan.Zero, TimeSpan.FromSeconds(2), "en"));
@@ -46,10 +47,30 @@ internal static class DesktopSmoke
             store.ApplyTranslation(generation, "1", 2, "实时字幕立即且清晰显示原文。");
             await Task.Delay(100);
 
-            // Verify incompatible semantic revision clears provisional draft
+            // Verify incompatible semantic revision retains display fallback
             store.ApplySource(generation, new("1", 3, "Live subtitles do not show the original immediately.", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
             await Task.Delay(100);
-            Check("incompatible revision clears provisional draft", window.TestTarget == "" || !window.TestTarget.Contains("立即"));
+            Check("incompatible revision retains visible translation", window.TestTarget.Contains("立即"));
+
+            var stickyFrames = new List<string>();
+            var stickyParagraph = window.TestVisibleParagraphs.Single();
+            EventHandler sampleStickyFrame = (_, _) => stickyFrames.Add(window.TestVisibleParagraphs.Single().Translation);
+            CompositionTarget.Rendering += sampleStickyFrame;
+            try
+            {
+                await Task.Delay(750);
+                window.SetExpanded(true);
+                await Task.Delay(750);
+                Check("sticky translation sampled actual WPF frames", stickyFrames.Count > 0);
+                Check("sticky translation has no blank WPF frames across compact and expanded", stickyFrames.All(x => x == "实时字幕立即且清晰显示原文。"));
+                Check("revision retains same paragraph instance", ReferenceEquals(stickyParagraph, window.TestVisibleParagraphs.Single()));
+                store.ApplyTranslation(generation, "1", 3, "实时字幕未立即显示原文。");
+                await Task.Delay(100);
+                Check("sticky translation atomically replaced in same paragraph", ReferenceEquals(stickyParagraph, window.TestVisibleParagraphs.Single()) && stickyParagraph.Translation == "实时字幕未立即显示原文。");
+            }
+            finally { CompositionTarget.Rendering -= sampleStickyFrame; }
+            File.WriteAllText(Path.Combine(directory, "sticky-wpf-frames.json"), JsonSerializer.Serialize(new { delayMilliseconds = 1500, frames = stickyFrames }, new JsonSerializerOptions { WriteIndented = true }));
+            window.SetExpanded(false);
 
             Capture(window, Path.Combine(directory, "desktop-compact.png"));
             store.ApplySource(generation, new("1", 4, string.Join(" ", Enumerable.Repeat("Latest words remain visible in a long sentence", 12)) + ".", true, TimeSpan.Zero, TimeSpan.FromSeconds(3), "en"));
@@ -199,13 +220,17 @@ internal static class DesktopSmoke
             var dialogToken = settings.TestLifetimeToken;
             settings.Close();
             Check("closing settings cancels model request lifetime", dialogToken.IsCancellationRequested);
+            var beforeLanguageSwitch = window.TestSettings;
+            await window.TestApplySettingsResultAsync(beforeLanguageSwitch with { TargetLanguage = "ja" });
+            Check("settings target-language switch clears old translations and fallback", store.Snapshot().Count == 0);
+            await window.TestApplySettingsResultAsync(beforeLanguageSwitch);
             window.SetExpanded(false);
             await window.StartDemoAsync();
             await Task.Delay(2800);
             Check("demo pipeline updates source", window.TestSource.Contains("Live subtitles"));
             await Phase4DesktopSmoke.RunAsync(window, directory, Check);
         }
-        finally { await File.WriteAllTextAsync(Path.Combine(directory, "desktop-smoke.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.Now, results }, new JsonSerializerOptions { WriteIndented = true })); await window.CloseAsync(); }
+        finally { await File.WriteAllTextAsync(Path.Combine(directory, "desktop-smoke.json"), JsonSerializer.Serialize(new { at = DateTimeOffset.Now, results }, new JsonSerializerOptions { WriteIndented = true })); await File.WriteAllTextAsync(Path.Combine(directory, "caption-trace.json"), JsonSerializer.Serialize(CaptionDiagnostics.Snapshot())); await window.CloseAsync(); }
     }
     static void Capture(Window window, string path)
     {

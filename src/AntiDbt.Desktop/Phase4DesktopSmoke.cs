@@ -461,6 +461,7 @@ internal static class Phase4DesktopSmoke
         check("A5: non-loopback http rejected even with allowLocalHttp", v9);
 
         // 2. Non-intrusive Settings: Cancel / Cosmetic save preserves running capture and history
+        main.TestConfigure(LanguageSettings.Select(main.TestSettings, "auto", "zh-Hans"));
         FixtureAsr currentAsr = new();
         ControllableFixtureTranslator currentTranslator = new();
         main.TestPipelineFactory = (settings, store) =>
@@ -496,7 +497,13 @@ internal static class Phase4DesktopSmoke
         check("A5: cosmetic settings applied", Math.Abs(main.TestSettings.BackgroundOpacity - 0.50) < 0.01 && !main.Topmost);
 
         // 2.3 Pipeline configuration change (e.g. Asr Provider) restarts pipeline cleanly with StopReason.Reconfigure
-        var reconfiguredSettings = LanguageSettings.Select(main.TestSettings with { Asr = ProviderDescriptors.DefaultAsr("VolcengineAsr2") with { ApiKey = "syn-asr" } }, "auto", "zh-Hans");
+        var reconfiguredSettings = main.TestSettings with
+        {
+            Asr = ProviderDescriptors.DefaultAsr("VolcengineAsr2") with
+            {
+                ApiKey = "syn-asr", Language = main.TestSettings.Asr.Language
+            }
+        };
         await main.TestApplySettingsResultAsync(reconfiguredSettings);
         await Idle(main);
         check("A5: pipeline settings save reconfigures and restarts pipeline", main.TestRunning && main.TestSettings.Asr.Provider == "VolcengineAsr2");
