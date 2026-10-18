@@ -45,6 +45,8 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
         readonly CancellationTokenSource _stop = new();
         readonly object _gate = new();
         readonly List<byte[]> _currentSentencePcm = [];
+        int _currentSentencePcmBytes = 0;
+        const int MaxSentencePcmBytes = 16000 * 2 * 45; // 45s of 16kHz 16-bit mono (~1.44 MB)
 
         IAsrSession? _localSession;
         Task? _pumpTask;
@@ -105,8 +107,18 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                 if (!_started || _completed || _disposed || pcm.Length % 2 != 0)
                     throw ProviderHttp.Failure(ProviderErrorKind.Configuration);
 
-                if (pcm.Length > 0)
-                    _currentSentencePcm.Add(pcm.ToArray());
+                if (pcm.Length > 0 && (_effectiveCloud is not null || _cloudTranscriber is not null))
+                {
+                    var bytes = pcm.ToArray();
+                    _currentSentencePcm.Add(bytes);
+                    _currentSentencePcmBytes += bytes.Length;
+                    while (_currentSentencePcm.Count > 0 && _currentSentencePcmBytes > MaxSentencePcmBytes)
+                    {
+                        var dropped = _currentSentencePcm[0];
+                        _currentSentencePcm.RemoveAt(0);
+                        _currentSentencePcmBytes -= dropped.Length;
+                    }
+                }
             }
 
             if (_localSession is not null)
@@ -151,8 +163,9 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                         TimeSpan segStart, segEnd;
                         lock (_gate)
                         {
-                            pcm = _currentSentencePcm.SelectMany(x => x).ToArray();
+                            pcm = _currentSentencePcm.Count > 0 ? _currentSentencePcm.SelectMany(x => x).ToArray() : [];
                             _currentSentencePcm.Clear();
+                            _currentSentencePcmBytes = 0;
                             segId = _currentSegmentId;
                             finalRev = ++_currentRevision;
                             segStart = _currentSentenceStart;
@@ -162,6 +175,20 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                             _currentSegmentId = $"hybrid-{_segmentCounter}";
                             _currentRevision = 0;
                             _currentSentenceStart = segEnd;
+                        }
+
+                        if (_effectiveCloud is null && _cloudTranscriber is null)
+                        {
+                            await _results.Writer.WriteAsync(new AsrResult(
+                                segId,
+                                finalRev,
+                                res.Text,
+                                IsFinal: true,
+                                AudioStart: segStart,
+                                AudioEnd: segEnd,
+                                Language: res.Language
+                            ), token);
+                            continue;
                         }
 
                         var job = new FinalJob(segId, finalRev, pcm, segStart, segEnd, res.Text, res.Language);
@@ -180,6 +207,25 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
             }
         }
 
+        private static bool IsWhisperArtifact(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return true;
+            var trimmed = text.Trim();
+            if (trimmed.Equals("[BLANK_AUDIO]", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("(silence)", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("[silence]", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("(music)", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("[music]", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("[applause]", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("(applause)", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("(laughter)", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("[laughter]", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
         async Task ProcessFinalJobsAsync(CancellationToken token)
         {
             try
@@ -187,7 +233,7 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                 await foreach (var job in _finalJobs.Reader.ReadAllAsync(token))
                 {
                     string finalText = job.LocalText;
-                    if (job.Pcm.Length > 0)
+                    if (job.Pcm.Length >= 3200) // Minimum 100ms PCM for Whisper
                     {
                         string? cloudText = null;
                         try
@@ -241,7 +287,7 @@ public sealed class HybridStreamingAsrProvider : IAsrProvider
                             cloudText = null;
                         }
 
-                        if (!string.IsNullOrWhiteSpace(cloudText))
+                        if (!string.IsNullOrWhiteSpace(cloudText) && !IsWhisperArtifact(cloudText))
                             finalText = cloudText;
                     }
 

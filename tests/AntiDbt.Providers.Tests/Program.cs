@@ -277,6 +277,63 @@ await Check("HybridStreamingAsr transitions to next segment without crosstalk", 
     Assert(results[1].SegmentId == "hybrid-2" && results[1].Text == "second sentence", "second segment is hybrid-2");
 });
 
+await Check("HybridStreamingAsr rejects Whisper silence artifacts and preserves local text", async () => {
+    var scripted = new[] {
+        new AsrResult("raw-1", 1, "important meeting message", true, TimeSpan.Zero, TimeSpan.FromSeconds(1.5))
+    };
+    var mockLocal = new MockScriptedAsrProvider(scripted);
+    var hybrid = new HybridStreamingAsrProvider(
+        localProvider: mockLocal,
+        cloudTranscriber: (pcm, cfg, tok) => Task.FromResult<string?>("[BLANK_AUDIO]"));
+
+    var config = new AsrConfiguration { Provider = "HybridStreamingAsr", Language = "en" };
+    await using var session = hybrid.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await session.ConnectAsync(limit.Token);
+    await session.SendAudioAsync(new byte[3200], limit.Token);
+    await session.CompleteAsync(limit.Token);
+
+    var results = new List<AsrResult>();
+    await foreach (var r in session.GetResultsAsync(limit.Token))
+        results.Add(r);
+
+    Assert(results.Count == 1, $"expected 1 result but got {results.Count}");
+    Assert(results[0].IsFinal && results[0].Text == "important meeting message", "BLANK_AUDIO hallucination must be rejected in favor of local text");
+});
+
+await Check("HybridStreamingAsr emits directly when no cloud provider configured", async () => {
+    var scripted = new[] {
+        new AsrResult("raw-1", 1, "pure local partial", false, TimeSpan.Zero, TimeSpan.FromSeconds(0.5)),
+        new AsrResult("raw-1", 2, "pure local final", true, TimeSpan.Zero, TimeSpan.FromSeconds(1.0))
+    };
+    var mockLocal = new MockScriptedAsrProvider(scripted);
+    var hybrid = new HybridStreamingAsrProvider(localProvider: mockLocal);
+
+    var config = new AsrConfiguration { Provider = "HybridStreamingAsr", Language = "en", ApiKey = "" };
+    await using var session = hybrid.CreateSession(config);
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    await session.ConnectAsync(limit.Token);
+    await session.SendAudioAsync(new byte[3200], limit.Token);
+    await session.CompleteAsync(limit.Token);
+
+    var results = new List<AsrResult>();
+    await foreach (var r in session.GetResultsAsync(limit.Token))
+        results.Add(r);
+
+    Assert(results.Count == 2, $"expected 2 results but got {results.Count}");
+    Assert(results[0].Text == "pure local partial" && !results[0].IsFinal, "partial result preserved");
+    Assert(results[1].Text == "pure local final" && results[1].IsFinal, "direct final emission preserved");
+});
+
+await Check("SherpaOnnx resolves model path with subdirectories", async () => {
+    var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = "models/sherpa-onnx" };
+    var resolved = SherpaOnnxStreamingAsrProvider.ResolveModelDirectory(config);
+    Assert(!string.IsNullOrWhiteSpace(resolved), "resolved path should not be empty");
+    if (Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"))) {
+        Assert(resolved.Contains("sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"), "auto-discovered zipformer subfolder in models directory");
+    }
+});
+
 var artifact=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../../artifacts/provider-tests.json")); Directory.CreateDirectory(Path.GetDirectoryName(artifact)!); await File.WriteAllTextAsync(artifact,JsonSerializer.Serialize(new {scope="localhost HTTP and WebSocket only; no cloud calls",redEvidence="tests/AntiDbt.Providers.Tests/behavioral-red.json (final drain regression failed before fix); review-red.json records six review regressions; language-red.json records official language aliases; suffix-red.json records unchanged provisional prefix; initial red.log is build-only",tests=outcomes},new JsonSerializerOptions{WriteIndented=true}));
 if(outcomes.Any(o=>o.GetType().GetProperty("passed")!.GetValue(o) is false)) Environment.ExitCode=1;
 

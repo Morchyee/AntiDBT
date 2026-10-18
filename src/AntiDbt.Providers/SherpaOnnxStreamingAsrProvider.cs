@@ -9,6 +9,7 @@ namespace AntiDbt.Providers;
 public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
 {
     public IAsrSession CreateSession(AsrConfiguration configuration) => new Session(configuration);
+    public static string ResolveModelDirectory(AsrConfiguration configuration) => Session.ResolveModelDirectory(configuration);
 
     public sealed class Session : IAsrSession
     {
@@ -47,21 +48,49 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
 
         public static string ResolveModelDirectory(AsrConfiguration config)
         {
-            if (!string.IsNullOrWhiteSpace(config.Model))
+            var raw = !string.IsNullOrWhiteSpace(config.Model)
+                ? config.Model
+                : (config.Options.TryGetValue("modelDir", out var modelDir) && !string.IsNullOrWhiteSpace(modelDir)
+                    ? modelDir
+                    : "models/sherpa-onnx");
+
+            if (Path.IsPathRooted(raw))
+                return raw;
+
+            // 1. Check relative to AppContext.BaseDirectory
+            var candidate1 = Path.Combine(AppContext.BaseDirectory, raw);
+            if (Directory.Exists(candidate1) && File.Exists(Path.Combine(candidate1, "tokens.txt")))
+                return candidate1;
+
+            // 2. Check relative to CurrentDirectory
+            var candidate2 = Path.Combine(Directory.GetCurrentDirectory(), raw);
+            if (Directory.Exists(candidate2) && File.Exists(Path.Combine(candidate2, "tokens.txt")))
+                return candidate2;
+
+            // 3. Scan subdirectories under models/ if user configured default or generic path
+            foreach (var root in new[] {
+                Path.Combine(AppContext.BaseDirectory, "models"),
+                Path.Combine(Directory.GetCurrentDirectory(), "models")
+            })
             {
-                if (Path.IsPathRooted(config.Model))
-                    return config.Model;
-                return Path.Combine(AppContext.BaseDirectory, config.Model);
+                if (Directory.Exists(root))
+                {
+                    if (File.Exists(Path.Combine(root, "tokens.txt")))
+                        return root;
+                    try
+                    {
+                        var subs = Directory.GetDirectories(root);
+                        foreach (var sub in subs)
+                        {
+                            if (File.Exists(Path.Combine(sub, "tokens.txt")))
+                                return sub;
+                        }
+                    }
+                    catch { }
+                }
             }
 
-            if (config.Options.TryGetValue("modelDir", out var modelDir) && !string.IsNullOrWhiteSpace(modelDir))
-            {
-                if (Path.IsPathRooted(modelDir))
-                    return modelDir;
-                return Path.Combine(AppContext.BaseDirectory, modelDir);
-            }
-
-            return Path.Combine(AppContext.BaseDirectory, "models", "sherpa-onnx");
+            return candidate1;
         }
 
         private static string? FindModelFile(string dir, string pattern, string? preferExtension = null)
@@ -194,6 +223,9 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
                     throw new InvalidOperationException("语音会话未就绪或已结束。");
             }
 
+            if (pcm.Length == 0)
+                return;
+
             int numSamples = pcm.Length / 2;
             var floatSamples = new float[numSamples];
             for (int i = 0; i < numSamples; i++)
@@ -249,7 +281,7 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
                     stream.AcceptWaveform(16000, samples);
                     _processedAudioTime += TimeSpan.FromSeconds((double)samples.Length / 16000);
 
-                    while (recognizer.IsReady(stream))
+                    while (recognizer.IsReady(stream) && !token.IsCancellationRequested)
                     {
                         recognizer.Decode(stream);
                     }
@@ -298,28 +330,31 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
                     }
                 }
 
-                // Audio stream completed, drain final tokens
-                stream.InputFinished();
-                while (recognizer.IsReady(stream))
+                // Audio stream completed, drain final tokens if not cancelled
+                if (!token.IsCancellationRequested)
                 {
-                    recognizer.Decode(stream);
-                }
+                    stream.InputFinished();
+                    while (recognizer.IsReady(stream) && !token.IsCancellationRequested)
+                    {
+                        recognizer.Decode(stream);
+                    }
 
-                var finalDrain = recognizer.GetResult(stream);
-                var remainingText = finalDrain?.Text?.Trim() ?? "";
-                if (!string.IsNullOrEmpty(remainingText))
-                {
-                    _currentRevision++;
-                    var finalResult = new AsrResult(
-                        _currentSegmentId,
-                        _currentRevision,
-                        remainingText,
-                        IsFinal: true,
-                        _currentSegmentStart,
-                        _processedAudioTime,
-                        _config.Language);
+                    var finalDrain = recognizer.GetResult(stream);
+                    var remainingText = finalDrain?.Text?.Trim() ?? "";
+                    if (!string.IsNullOrEmpty(remainingText))
+                    {
+                        _currentRevision++;
+                        var finalResult = new AsrResult(
+                            _currentSegmentId,
+                            _currentRevision,
+                            remainingText,
+                            IsFinal: true,
+                            _currentSegmentStart,
+                            _processedAudioTime,
+                            _config.Language);
 
-                    await _resultsChannel.Writer.WriteAsync(finalResult, token);
+                        await _resultsChannel.Writer.WriteAsync(finalResult, token);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -352,13 +387,18 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
             {
                 try
                 {
-                    await _worker.WaitAsync(TimeSpan.FromSeconds(2));
+                    await _worker.WaitAsync(TimeSpan.FromSeconds(3));
                 }
                 catch { }
             }
 
-            _stream?.Dispose();
-            _recognizer?.Dispose();
+            lock (_gate)
+            {
+                _stream?.Dispose();
+                _stream = null;
+                _recognizer?.Dispose();
+                _recognizer = null;
+            }
             _cts.Dispose();
         }
     }

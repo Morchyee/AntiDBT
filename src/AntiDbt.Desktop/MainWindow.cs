@@ -928,7 +928,7 @@ public sealed class MainWindow : Window
             {
                 paragraphs.Add(updated[i]);
             }
-            else if (paragraphs[i].SessionId == updated[i].SessionId && paragraphs[i].SegmentId == updated[i].SegmentId)
+            else if (paragraphs[i].SessionId == updated[i].SessionId)
             {
                 if (!Equals(paragraphs[i], updated[i]))
                 {
