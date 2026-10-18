@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Minimalist · Ultra-Low Latency · Highly Customizable Real-Time Bilingual Subtitles Floating Desktop App for Windows</b><br>
-  <sub>Independent Clean-Room Open-Source Project · Zero Proprietary Protocol Lock-in · Mix & Match Any ASR & MT Providers</sub>
+  <sub>Independent Open-Source Live Captioning Product · Mix & Match ASR & MT Providers</sub>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 **antiDBT** is an independently engineered real-time bilingual subtitle floating overlay client designed for Windows 10 and 11. By capturing desktop system audio through Windows WASAPI loopback, combined with voice activity detection (VAD), modern speech-to-text (ASR), and machine translation (MT) services, it renders clean, ultra-responsive bilingual subtitles directly onto your screen.
 
-Built following a clean-room development paradigm, antiDBT **does not utilize any proprietary Doubao code, unpublished protocols, or private credentials**. It is tailored for watching raw foreign videos, international live streams, cross-border virtual meetings, and online learning.
+antiDBT is an independently developed, open-source live captioning product. It is tailored for watching raw foreign videos, international live streams, cross-border virtual meetings, and online learning.
 
 ---
 
@@ -149,9 +149,8 @@ pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.3-beta"
 
 ## ⚖️ Disclaimer
 
-1. **Independent Project**: **antiDBT** is an independent open-source technical research project and is not affiliated with, endorsed by, or associated with ByteDance Ltd. or the official "Doubao" product.
-2. **Clean Implementation**: All source code, layouts, and pipelines are created from scratch without reverse-engineered closed-source binaries, stolen tokens, or proprietary assets.
-3. **Usage Compliance**: Users are responsible for their own network traffic, API consumption, costs, and compliance with the Terms of Service of their chosen third-party providers.
+1. **Independent Product**: **antiDBT** is an independently developed, open-source live captioning product.
+2. **Usage Compliance**: Users are responsible for their own network traffic, API consumption, costs, and compliance with the Terms of Service of their chosen third-party providers.
 
 ---
 
