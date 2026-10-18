@@ -81,14 +81,14 @@
 
 - **操作系统**：Windows 10 / Windows 11 (x64)
 - **音频架构**：支持 WASAPI 回环采集的声卡/音频设备（系统默认扬声器/耳机）
-- **便携包运行时**：发布包内置独立自包含 .NET 9 运行时，**终端用户无需单独安装 .NET SDK 或运行库**。.NET 10 LTS 处于独立分支评估与适配阶段。
+- **便携包运行时**：发布包内置独立自包含 .NET 10 运行时，**终端用户无需单独安装 .NET SDK 或运行库**。当前发布使用 .NET 10。
 
 ---
 
 ## 🚀 快速上手
 
 ### 1. 下载与运行
-1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下载最新版本的 `antiDBT-v0.5.3-beta-win-x64.zip`。
+1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下载最新版本的 `antiDBT-v0.5.5-beta.4-win-x64-full.zip`。
 2. 解压压缩包到本地任意目录（例如 `D:\Tools\antiDBT\`）。
 3. 双击解压目录中的 `antiDBT.exe` 即可启动。
 
@@ -108,10 +108,10 @@
 
 ## 🛠️ 源码构建与测试
 
-本项目采用 C# 13 与 .NET 9 WPF 编写，已配置 `global.json` 锁定 SDK 9.0.319 以实现确定性构建。
+本项目采用 C# 14 与 .NET 10 WPF 编写，已配置 `global.json` 锁定 SDK 10.0.402 以实现确定性构建。
 
 ### 依赖环境
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (9.0.319 推荐)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 推荐)
 - Windows 10/11 x64
 - PowerShell 7 (`pwsh`)
 

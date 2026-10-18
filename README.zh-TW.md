@@ -14,8 +14,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/.NET-9.0-512BD4.svg?logo=dotnet" alt=".NET 9.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.3--beta-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
+  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>
@@ -78,14 +78,14 @@
 
 - **作業系統**：Windows 10 / Windows 11 (x64)
 - **音訊架構**：支援 WASAPI 回環擷取的音效卡/音訊設備（系統預設喇叭/耳機）
-- **便攜包執行階段**：發布包內建獨立自包含 .NET 9 執行階段，**終端使用者無需單獨安裝 .NET SDK 或執行環境**。.NET 10 LTS 處於獨立分支評估與適配階段。
+- **便攜包執行階段**：發布包內建獨立自包含 .NET 10 執行階段，**終端使用者無需單獨安裝 .NET SDK 或執行環境**。目前發布使用 .NET 10。
 
 ---
 
 ## 🚀 快速上手
 
 ### 1. 下載與執行
-1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下載最新版本的 `antiDBT-v0.5.3-beta-win-x64.zip`。
+1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下載最新版本的 `antiDBT-v0.5.5-beta.4-win-x64-full.zip`。
 2. 解壓縮封包到本機任意目錄（例如 `D:\Tools\antiDBT\`）。
 3. 按兩下解壓縮目錄中的 `antiDBT.exe` 即可啟動。
 
@@ -105,10 +105,10 @@
 
 ## 🛠️ 原始碼建置與測試
 
-本專案採用 C# 13 與 .NET 9 WPF 編寫，已配置 `global.json` 鎖定 SDK 9.0.319 以實現確定性建置。
+本專案採用 C# 14 與 .NET 10 WPF 編寫，已配置 `global.json` 鎖定 SDK 10.0.402 以實現確定性建置。
 
 ### 相依環境
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (9.0.319 推薦)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 推薦)
 - Windows 10/11 x64
 - PowerShell 7 (`pwsh`)
 

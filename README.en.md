@@ -14,8 +14,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/.NET-9.0-512BD4.svg?logo=dotnet" alt=".NET 9.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.3--beta-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
+  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>
@@ -78,14 +78,14 @@ Built following a clean-room development paradigm, antiDBT **does not utilize an
 
 - **Operating System**: Windows 10 / Windows 11 (x64)
 - **Audio Architecture**: Any soundcard/device supporting WASAPI loopback (standard system output, speakers, headphones)
-- **Portable Runtime**: The binary release includes a self-contained .NET 9 runtime; **no separate .NET SDK or runtime installation is required for end users**. .NET 10 LTS support is under active evaluation in a dedicated branch.
+- **Portable Runtime**: The binary release includes a self-contained .NET 10 runtime; **no separate .NET SDK or runtime installation is required for end users**. This release uses .NET 10.
 
 ---
 
 ## 🚀 Quick Start
 
 ### 1. Download & Launch
-1. Download the latest `antiDBT-v0.5.3-beta-win-x64.zip` from [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases).
+1. Download the latest `antiDBT-v0.5.5-beta.4-win-x64-full.zip` from [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases).
 2. Extract the archive into any preferred directory (e.g. `D:\Tools\antiDBT\`).
 3. Run `antiDBT.exe`.
 
@@ -105,10 +105,10 @@ Built following a clean-room development paradigm, antiDBT **does not utilize an
 
 ## 🛠️ Building & Verification from Source
 
-Written in C# 13 and .NET 9 WPF. The repository contains a `global.json` locking the toolchain to SDK 9.0.319 for deterministic builds.
+Written in C# 14 and .NET 10 WPF. The repository contains a `global.json` locking the toolchain to SDK 10.0.402 for deterministic builds.
 
 ### Prerequisites
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (9.0.319 recommended)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 recommended)
 - Windows 10/11 x64
 - PowerShell 7 (`pwsh`)
 

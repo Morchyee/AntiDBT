@@ -14,8 +14,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/.NET-9.0-512BD4.svg?logo=dotnet" alt=".NET 9.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.3--beta-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
+  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>
@@ -78,14 +78,14 @@
 
 - **OS**：Windows 10 / Windows 11 (x64)
 - **オーディオ**：WASAPI ループバック対応のサウンドカード/オーディオ出力デバイス（通常のスピーカーやヘッドホン）
-- **ポータブル版ランタイム**：リリースパッケージには自己完結型の .NET 9 ランタイムが同梱されており、**一般ユーザーが .NET SDK またはランタイムを個別にインストールする必要はありません**。.NET 10 LTS 対応は専用検証ブランチで評価・移植を進めています。
+- **ポータブル版ランタイム**：リリースパッケージには自己完結型の .NET 10 ランタイムが同梱されており、**一般ユーザーが .NET SDK またはランタイムを個別にインストールする必要はありません**。.NET 10 LTS 対応は専用検証ブランチで評価・移植を進めています。
 
 ---
 
 ## 🚀 クイックスタート
 
 ### 1. ダウンロードと起動
-1. [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) から最新の `antiDBT-v0.5.3-beta-win-x64.zip` をダウンロードします。
+1. [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) から最新の `antiDBT-v0.5.5-beta.4-win-x64-full.zip` をダウンロードします。
 2. 任意のフォルダ（例：`D:\Tools\antiDBT\`）に解凍します。
 3. 解凍先の `antiDBT.exe` をダブルクリックして起動します。
 
@@ -105,10 +105,10 @@
 
 ## 🛠️ ソースコードからのビルドとテスト
 
-C# 13 および .NET 9 WPF で開発されています。再現可能なビルドのため、`global.json` で SDK 9.0.319 に固定されています。
+C# 14 および .NET 10 WPF で開発されています。再現可能なビルドのため、`global.json` で SDK 10.0.402 に固定されています。
 
 ### 必須環境
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (9.0.319 推奨)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 推奨)
 - Windows 10/11 x64
 - PowerShell 7 (`pwsh`)
 
