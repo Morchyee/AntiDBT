@@ -1,6 +1,6 @@
 # antiDBT · 独立实时双语字幕客户端
 
-本地英文 ASR 完整版包含 Sherpa-ONNX Zipformer 20M int8 模型，无需 Groq Key、SDK、Python 或 Go。[完整中文部署教程](docs/LOCAL_ASR_SETUP.zh-CN.md)。中文翻译需另行配置 MT 服务。
+本次运行要求 Windows 10 1903（Build 18362）及以上或 Windows 11。本地英文 ASR 完整版包含 Sherpa-ONNX Zipformer 20M int8 模型，无需 Groq Key、SDK、Python 或 Go。[完整中文部署教程](docs/LOCAL_ASR_SETUP.zh-CN.md)。中文翻译需另行配置 MT 服务。
 
 
 <p align="center">

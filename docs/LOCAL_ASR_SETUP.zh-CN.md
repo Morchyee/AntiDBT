@@ -81,3 +81,7 @@ MT 与 ASR 的 API Key 独立；例如 Azure Translator 填写翻译资源 Key �
 模型缺失或损坏：退出程序，重新下载完整 ZIP 并校验 SHA256，再完整解压。确保四个文件非空，保留两个原生文件 sherpa-onnx-c-api.dll 和 onnxruntime.dll。手动下载归档可能与量化完整版布局不同，请保留归档中所有 ONNX 文件。无模型会显示错误；可手动更改目录。
 
 升级时先停止旧程序，将新版解压至新目录；不要把个人 data 文件夹上传给其他人。移动盘符时同时移动整个 antiDBT 文件夹，并优先保留相对模型路径。
+
+## Windows 版本与中文路径
+
+本次便携包支持 Windows 10 1903（Build 18362）及以上版本和 Windows 11。程序清单启用进程级 UTF-8，使 Sherpa-ONNX 原生模型路径能正确处理中文目录；不需要修改 Windows 系统区域或全局代码页。Windows 10 更早版本不在本次验证与支持范围内。

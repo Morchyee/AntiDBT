@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -16,6 +17,8 @@ namespace AntiDbt.Desktop;
 // Runs inside the self-contained EXE. Input audio and reports stay outside the bundle.
 internal static class LocalAsrReleaseSmoke
 {
+    [DllImport("kernel32.dll")]
+    private static extern uint GetACP();
     internal static async Task RunAsync(MainWindow window, string[] args, string directory)
     {
         if (args.Length < 3) throw new ArgumentException("--local-asr-smoke <English WAV> <report directory> [--mt-settings <existing data directory>]");
@@ -108,6 +111,7 @@ internal static class LocalAsrReleaseSmoke
             var report = new { outcome, audio = "English WAV played three times through Windows default output and captured with real WASAPI loopback",
                 mt = mtIndex >= 0 ? settings.Translation.Provider : "en -> en passthrough; no API key or network",
                 asr = window.TestSettings.Asr.Provider,
+                processAnsiCodePage = GetACP(),
                 modelRelativeToExe = Path.GetRelativePath(AppContext.BaseDirectory, model),
                 elapsedSeconds = clock.Elapsed.TotalSeconds, cpuSeconds = cpu,
                 averageCpuPercentOfMachine = 100 * cpu / clock.Elapsed.TotalSeconds / Environment.ProcessorCount,
