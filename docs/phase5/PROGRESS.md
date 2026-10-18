@@ -93,3 +93,7 @@
 - 新发布入口 scripts/publish-local-asr.ps1：完整模型、中文教程、单一 antiDBT/ 根目录、无测试音频、逐 ZIP 文件校验。
 - 新增 --local-asr-smoke，真实播放英语 WAV 经 WASAPI -> 现有字幕管线 -> WPF 渲染；可显式指定现有 MT 配置，报告不含密钥。
 - 真实便携包音频、英译中、跨盘测试与 GitHub 发布待完成；不得按准备状态宣称发布成功。
+
+- 便携 EXE 真实 WASAPI 英文验证通过：7 个终态片段、1816 个有字幕渲染帧。此前失败来自验证入口在 Loaded 之前配置而被默认设置覆盖，已修复验证顺序并断言 SherpaOnnx；应用业务行为未改动。
+- 实测轻量模型存在漏字及单字短片段，作为 prerelease 限制披露；不宣称识别准确率。
+- 最终全量回归、成品 ZIP 全新解压/跨盘/真实 MT 以及 GitHub 发布结果保存于 artifacts/release-0.5.5.4-beta。
