@@ -85,19 +85,19 @@ try {
     # 3. Copy Notices, Licenses & Documentation
     Write-Host "`n[3/6] Bundling documentation, licenses, and metadata..." -ForegroundColor Yellow
     $readmes = @('README.md', 'README.en.md', 'README.zh-TW.md', 'README.ja.md') | Where-Object { Test-Path -LiteralPath $_ }
-    Copy-Item -LiteralPath ($readmes + @('THIRD-PARTY-NOTICES.md', 'LICENSE')) -Destination $destination
+    Copy-Item -LiteralPath ($readmes + @('THIRD-PARTY-NOTICES.md', 'LICENSE')) -Destination $destination -Force
     if (Test-Path -LiteralPath licenses) {
-        Copy-Item -LiteralPath licenses -Destination $destination -Recurse
+        Copy-Item -LiteralPath licenses -Destination $destination -Recurse -Force
     }
     New-Item -ItemType Directory -Path (Join-Path $destination 'docs') -Force | Out-Null
-    foreach ($doc in @('API_PROVIDERS.md', 'ARCHITECTURE.md', 'PROVIDER-SPECS.md', 'COMPLETION-MATRIX.md', 'VALIDATION.md')) {
+    foreach ($doc in @('API_PROVIDERS.md', 'ARCHITECTURE.md', 'PROVIDER-SPECS.md', 'COMPLETION-MATRIX.md', 'VALIDATION.md', 'CODEX_HANDOFF.md')) {
         $p = Join-Path docs $doc
         if (Test-Path -LiteralPath $p) {
-            Copy-Item -LiteralPath $p -Destination (Join-Path $destination 'docs')
+            Copy-Item -LiteralPath $p -Destination (Join-Path $destination 'docs') -Force
         }
     }
     if (Test-Path -LiteralPath docs/phase5) {
-        Copy-Item -LiteralPath docs/phase5 -Destination (Join-Path $destination 'docs') -Recurse
+        Copy-Item -LiteralPath docs/phase5 -Destination (Join-Path $destination 'docs') -Recurse -Force
     }
 
     # Generate DEPENDENCIES.json metadata
