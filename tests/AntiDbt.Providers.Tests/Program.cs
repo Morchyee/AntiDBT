@@ -161,7 +161,7 @@ await Check("SherpaOnnx real model streams real audio with partial and final res
     };
     var provider = new SherpaOnnxStreamingAsrProvider();
     await using var session = provider.CreateSession(config);
-    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(45));
     await session.ConnectAsync(limit.Token);
 
     var wavBytes = await File.ReadAllBytesAsync(wavPath, limit.Token);

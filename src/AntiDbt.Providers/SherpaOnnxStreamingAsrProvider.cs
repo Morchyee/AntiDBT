@@ -288,7 +288,7 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
 
                     bool isEndpoint = recognizer.IsEndpoint(stream);
                     var rawResult = recognizer.GetResult(stream);
-                    var text = rawResult?.Text?.Trim() ?? "";
+                    var text = TextNormalizer.NormalizeAsrText(rawResult?.Text ?? "");
 
                     if (isEndpoint)
                     {
@@ -340,7 +340,7 @@ public sealed class SherpaOnnxStreamingAsrProvider : IAsrProvider
                     }
 
                     var finalDrain = recognizer.GetResult(stream);
-                    var remainingText = finalDrain?.Text?.Trim() ?? "";
+                    var remainingText = TextNormalizer.NormalizeAsrText(finalDrain?.Text ?? "");
                     if (!string.IsNullOrEmpty(remainingText))
                     {
                         _currentRevision++;

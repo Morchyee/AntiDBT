@@ -866,6 +866,48 @@ Test("LatencyMonitor records UI apply latency and computes P50 and P95", () => {
     Check(snapshot.P95Milliseconds >= 94 && snapshot.P95Milliseconds <= 96, $"Expected P95 ~95, got {snapshot.P95Milliseconds}");
 });
 
+Test("TextNormalizer converts all-caps Latin ASR to natural sentence case while preserving acronyms and CJK", () => {
+    Check(TextNormalizer.NormalizeAsrText("HELLO WORLD HOW ARE YOU") == "Hello world how are you", "Basic Latin sentence case failed");
+    Check(TextNormalizer.NormalizeAsrText("I'M HERE AND I'LL GO. ARE YOU READY?") == "I'm here and I'll go. Are you ready?", "Contractions and multiple sentences failed");
+    Check(TextNormalizer.NormalizeAsrText("AI") == "AI", "Short acronym should remain untouched");
+    Check(TextNormalizer.NormalizeAsrText("iPhone and FastAPI") == "iPhone and FastAPI", "Mixed case should remain untouched");
+    Check(TextNormalizer.NormalizeAsrText("こんにちは世界") == "こんにちは世界", "Japanese text should remain untouched");
+    Check(TextNormalizer.NormalizeAsrText("你好，世界！") == "你好，世界！", "Chinese text should remain untouched");
+    Check(TextNormalizer.NormalizeAsrText("") == "", "Empty text handling failed");
+});
+
+Test("SubtitleExporter produces valid SRT, WebVTT, and TXT with timestamps and bilingual texts", () => {
+    var seg1 = new CaptionSegment(1, "s1", 1, "Hello world", "你好世界", true, TimeSpan.FromSeconds(1.2), TimeSpan.FromSeconds(3.5), 1000, 1100, "en");
+    var seg2 = new CaptionSegment(1, "s2", 1, "Good morning", "早上好", true, TimeSpan.FromSeconds(4.0), TimeSpan.FromSeconds(5.2), 2000, 2100, "en");
+    var list = new[] { seg1, seg2 };
+
+    var srt = SubtitleExporter.ToSrt(list);
+    Check(srt.Contains("1"), "SRT missing index 1");
+    Check(srt.Contains("00:00:01,200 --> 00:00:03,500"), "SRT timestamp format incorrect");
+    Check(srt.Contains("Hello world") && srt.Contains("你好世界"), "SRT missing bilingual content");
+    Check(srt.Contains("00:00:04,000 --> 00:00:05,200"), "SRT second timestamp incorrect");
+
+    var vtt = SubtitleExporter.ToVtt(list);
+    Check(vtt.StartsWith("WEBVTT"), "VTT must start with WEBVTT header");
+    Check(vtt.Contains("00:00:01.200 --> 00:00:03.500"), "VTT timestamp format incorrect");
+    Check(vtt.Contains("Good morning") && vtt.Contains("早上好"), "VTT missing bilingual content");
+
+    var txt = SubtitleExporter.ToText(list);
+    Check(txt.Contains("Hello world") && txt.Contains("你好世界") && txt.Contains("Good morning"), "TXT missing text");
+    Check(!txt.Contains("-->"), "TXT should not contain subtitle timing arrows");
+});
+
+Test("SubtitleStore Clear purges all active segments and reset state", () => {
+    var store = new SubtitleStore();
+    var session = store.BeginSession();
+    store.ApplySource(session, new AsrResult("s1", 1, "Testing 1", true, TimeSpan.Zero, TimeSpan.FromSeconds(1)));
+    store.ApplyTranslation(session, "s1", 1, "测试 1");
+    Check(store.Snapshot().Count == 1, "Store should contain 1 segment");
+
+    store.Clear();
+    Check(store.Snapshot().Count == 0, "Store should be empty after Clear()");
+});
+
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 return failures == 0 ? 0 : 1;

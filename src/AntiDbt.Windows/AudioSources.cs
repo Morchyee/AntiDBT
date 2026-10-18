@@ -178,9 +178,13 @@ internal sealed class LoopbackSession : ICaptureSession
     public LoopbackSession(string? deviceId)
     {
         using var enumerator = new MMDeviceEnumerator();
-        device = string.IsNullOrEmpty(deviceId)
-            ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)
-            : enumerator.GetDevice(deviceId);
+        MMDevice? dev = null;
+        if (!string.IsNullOrEmpty(deviceId))
+        {
+            try { dev = enumerator.GetDevice(deviceId); }
+            catch { dev = null; }
+        }
+        device = dev ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
         try
         {
             capture = new WasapiLoopbackCapture(device);

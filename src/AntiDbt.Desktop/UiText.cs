@@ -86,6 +86,15 @@ public static class UiText
     public static string MenuCopyAll => Pick("复制全部记录", "Copy All History", "すべての履歴をコピー");
     public static string MenuClearHistory => Pick("清空屏幕记录", "Clear Subtitle History", "画面の履歴を消去");
     public static string MenuTopmost => Pick("置顶显示", "Always on Top", "常に最前面に表示");
+    public static string MenuClickThrough => Pick("鼠标穿透 (Ctrl+Alt+T)", "Click-Through Overlay (Ctrl+Alt+T)", "マウスクリック透過 (Ctrl+Alt+T)");
+    public static string MenuExportSubtitles => Pick("导出字幕记录...", "Export Subtitles...", "字幕をエクスポート...");
+    public static string ExportSrt => Pick("导出为 SRT 字幕 (*.srt)", "Export as SRT (*.srt)", "SRT 字幕としてエクスポート (*.srt)");
+    public static string ExportVtt => Pick("导出为 VTT 字幕 (*.vtt)", "Export as VTT (*.vtt)", "VTT 字幕としてエクスポート (*.vtt)");
+    public static string ExportTxt => Pick("导出为 纯文本 TXT (*.txt)", "Export as Plain Text (*.txt)", "テキストとしてエクスポート (*.txt)");
+    public static string ExportNoSubtitles => Pick("暂无字幕记录可导出", "No subtitles available to export", "エクスポート可能な字幕がありません");
+    public static string ExportSuccess => Pick("已成功导出字幕到: {0}", "Subtitles exported successfully to: {0}", "字幕を保存しました: {0}");
+    public static string ClickThroughEnabled => Pick("鼠标穿透已开启 · 按 Ctrl+Alt+T 可恢复交互", "Click-through enabled · Press Ctrl+Alt+T to restore", "マウスクリック透過が有効 · Ctrl+Alt+T で復帰");
+    public static string ClickThroughDisabled => Pick("鼠标穿透已关闭 · 恢复正常窗口交互", "Click-through disabled · Restored window interaction", "マウスクリック透過が無効 · 通常モードに復帰");
     public static string MenuExit => Pick("退出 antiDBT", "Exit antiDBT", "antiDBT を終了");
 
     // Settings Window Navigation

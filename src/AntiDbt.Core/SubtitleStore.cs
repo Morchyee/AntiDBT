@@ -52,6 +52,15 @@ public sealed class SubtitleStore
         Changed?.Invoke();
         return session;
     }
+    public void Clear()
+    {
+        lock (_sync)
+        {
+            _rows.Clear();
+            _deleted.Clear();
+        }
+        Changed?.Invoke();
+    }
     public CaptionSegment? ApplySource(long session, AsrResult result)
     {
         CaptionSegment? row;

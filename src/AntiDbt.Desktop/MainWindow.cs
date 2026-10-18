@@ -388,6 +388,11 @@ public sealed class MainWindow : Window
                 CopyCaption();
                 e.Handled = true;
             }
+            else if (e.Key == Key.T && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            {
+                ToggleClickThrough();
+                e.Handled = true;
+            }
         };
 
         SizeChanged += (_, e) =>
@@ -829,9 +834,45 @@ public sealed class MainWindow : Window
         MenuItem top = new() { Header = UiText.MenuTopmost, IsCheckable = true, IsChecked = Topmost };
         top.Click += async (_, _) => { Topmost = top.IsChecked; settings = settings with { Topmost = Topmost }; await SaveSettingsAsync(); };
         menu.Items.Add(top);
+        MenuItem clickThrough = new() { Header = UiText.MenuClickThrough, IsCheckable = true, IsChecked = isClickThrough };
+        clickThrough.Click += (_, _) => ToggleClickThrough();
+        menu.Items.Add(clickThrough);
+
+        menu.Items.Add(new Separator());
+
         MenuItem copy = new() { Header = UiText.MenuCopy };
         copy.Click += (_, _) => CopyCaption();
         menu.Items.Add(copy);
+
+        var exportItem = new MenuItem { Header = UiText.MenuExportSubtitles };
+        var srtItem = new MenuItem { Header = UiText.ExportSrt };
+        srtItem.Click += (_, _) => ExportSubtitles("srt");
+        exportItem.Items.Add(srtItem);
+        var vttItem = new MenuItem { Header = UiText.ExportVtt };
+        vttItem.Click += (_, _) => ExportSubtitles("vtt");
+        exportItem.Items.Add(vttItem);
+        var txtItem = new MenuItem { Header = UiText.ExportTxt };
+        txtItem.Click += (_, _) => ExportSubtitles("txt");
+        exportItem.Items.Add(txtItem);
+        menu.Items.Add(exportItem);
+
+        MenuItem clear = new() { Header = UiText.MenuClearHistory };
+        clear.Click += (_, _) =>
+        {
+            store.Clear();
+            paragraphs.Clear();
+            source.Text = "";
+            target.Text = "";
+            SetStatus("字幕记录已清空", currentPipelineState);
+        };
+        menu.Items.Add(clear);
+
+        menu.Items.Add(new Separator());
+
+        MenuItem exit = new() { Header = UiText.MenuExit };
+        exit.Click += async (_, _) => await CloseAsync();
+        menu.Items.Add(exit);
+
         ContextMenu = menu;
     }
 
@@ -1166,6 +1207,10 @@ public sealed class MainWindow : Window
         catch { SetStatus("关闭时音频资源释放异常", PipelineState.Error); }
         finally
         {
+            if (PresentationSource.FromVisual(this) is HwndSource src)
+            {
+                try { UnregisterHotKey(src.Handle, HOTKEY_ID_CLICKTHROUGH); } catch { }
+            }
             allowClose = true;
             if (!Dispatcher.HasShutdownStarted)
             {
@@ -1193,6 +1238,77 @@ public sealed class MainWindow : Window
         }
         catch { SetStatus("无法写入剪贴板，请重试", PipelineState.Error); }
     }
+
+    bool isClickThrough;
+
+    public void ToggleClickThrough() => SetClickThrough(!isClickThrough);
+
+    public void SetClickThrough(bool enable)
+    {
+        isClickThrough = enable;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+        {
+            var style = GetWindowLongEx(hwnd, GWL_EXSTYLE);
+            long styleLong = style.ToInt64();
+            if (enable)
+                styleLong |= WS_EX_TRANSPARENT;
+            else
+                styleLong &= ~WS_EX_TRANSPARENT;
+            SetWindowLongEx(hwnd, GWL_EXSTYLE, new IntPtr(styleLong));
+        }
+
+        RebuildContextMenu();
+        SetStatus(isClickThrough ? UiText.ClickThroughEnabled : UiText.ClickThroughDisabled, currentPipelineState);
+    }
+
+    void ExportSubtitles(string format)
+    {
+        try
+        {
+            var rows = store.Snapshot();
+            if (rows.Count == 0)
+            {
+                SetStatus(UiText.ExportNoSubtitles, PipelineState.Stopped);
+                return;
+            }
+
+            var defaultName = $"subtitles_{DateTime.Now:yyyyMMdd_HHmmss}.{format.ToLowerInvariant()}";
+            var filter = format.ToLowerInvariant() switch
+            {
+                "srt" => "SubRip Subtitle (*.srt)|*.srt|All Files (*.*)|*.*",
+                "vtt" => "WebVTT Subtitle (*.vtt)|*.vtt|All Files (*.*)|*.*",
+                _ => "Plain Text (*.txt)|*.txt|All Files (*.*)|*.*"
+            };
+
+            var sfd = new Microsoft.Win32.SaveFileDialog
+            {
+                FileName = defaultName,
+                Filter = filter,
+                DefaultExt = "." + format.ToLowerInvariant()
+            };
+
+            if (sfd.ShowDialog(this) == true)
+            {
+                string content = format.ToLowerInvariant() switch
+                {
+                    "srt" => SubtitleExporter.ToSrt(rows, includeProvisional: false),
+                    "vtt" => SubtitleExporter.ToVtt(rows, includeProvisional: false),
+                    _ => SubtitleExporter.ToText(rows, includeProvisional: false)
+                };
+
+                File.WriteAllText(sfd.FileName, content, System.Text.Encoding.UTF8);
+                SetStatus(string.Format(UiText.ExportSuccess, Path.GetFileName(sfd.FileName)), currentPipelineState);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("导出字幕失败: " + ex.Message, PipelineState.Error);
+        }
+    }
+
+    internal bool TestClickThrough => isClickThrough;
+    internal void TestSetClickThrough(bool enable) => SetClickThrough(enable);
 
     internal AppSettings TestSettings => settings;
     internal void TestConfigure(AppSettings value) { settings = LanguageSettings.Upgrade(value); ApplyTheme(); RefreshLanguages(); Render(); }
@@ -1273,6 +1389,48 @@ public sealed class MainWindow : Window
 
     const int WM_NCHITTEST = 0x0084;
     const int WM_SIZING = 0x0214;
+    const int WM_HOTKEY = 0x0312;
+    const int HOTKEY_ID_CLICKTHROUGH = 9001;
+    const uint MOD_ALT = 0x0001;
+    const uint MOD_CONTROL = 0x0002;
+    const uint VK_T = 0x54;
+    const int WS_EX_TRANSPARENT = 0x00000020;
+    const int GWL_EXSTYLE = -20;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+    static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
+    static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+    static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
+    static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    static IntPtr GetWindowLongEx(IntPtr hWnd, int nIndex)
+    {
+        if (IntPtr.Size == 8)
+            return GetWindowLongPtr64(hWnd, nIndex);
+        return new IntPtr(GetWindowLong32(hWnd, nIndex));
+    }
+
+    static IntPtr SetWindowLongEx(IntPtr hWnd, int nIndex, IntPtr dwNewLong)
+    {
+        if (IntPtr.Size == 8)
+            return SetWindowLongPtr64(hWnd, nIndex, dwNewLong);
+        return new IntPtr(SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32()));
+    }
+
     const int HTLEFT = 10;
     const int HTRIGHT = 11;
     const int HTTOP = 12;
@@ -1286,11 +1444,20 @@ public sealed class MainWindow : Window
     {
         base.OnSourceInitialized(e);
         if (PresentationSource.FromVisual(this) is HwndSource source)
+        {
             source.AddHook(WndProc);
+            try { RegisterHotKey(source.Handle, HOTKEY_ID_CLICKTHROUGH, MOD_CONTROL | MOD_ALT, VK_T); } catch { }
+        }
     }
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID_CLICKTHROUGH)
+        {
+            ToggleClickThrough();
+            handled = true;
+            return IntPtr.Zero;
+        }
         if (msg == WM_SIZING)
         {
             userResized = true;
