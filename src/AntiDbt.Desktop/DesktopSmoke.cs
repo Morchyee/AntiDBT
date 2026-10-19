@@ -137,11 +137,17 @@ internal static class DesktopSmoke
             Capture(window, Path.Combine(directory, "desktop-stretched-tall.png"));
 
             // Test window stretched wide
+            double beforeWideWidth = window.ActualWidth;
+            double beforeWideHistoryWidth = window.TestHistory.ActualWidth;
             window.Width = 1100;
             window.Height = 450;
             await Task.Delay(150);
             await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-            Check("window adapts to wide layout", window.TestHistory.ActualWidth > 1000);
+            window.UpdateLayout();
+            double widthGrowth = window.ActualWidth - beforeWideWidth;
+            double historyGrowth = window.TestHistory.ActualWidth - beforeWideHistoryWidth;
+            Check("window adapts to wide layout",
+                widthGrowth > 0 && historyGrowth > 0 && Math.Abs(historyGrowth - widthGrowth) < 1);
             Capture(window, Path.Combine(directory, "desktop-stretched-wide.png"));
 
             // Reset to default size

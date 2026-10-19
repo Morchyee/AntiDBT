@@ -205,6 +205,7 @@ try {
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
     Set-Content -LiteralPath $desktopLog -Value ($stdout + "`n" + $stderr)
+    if (-not [string]::IsNullOrWhiteSpace($stdout)) { Write-Host $stdout.TrimEnd() }
 
     $desktopPassed = ($desktopProc.ExitCode -eq 0)
     $desktopColor = if ($desktopPassed) { [ConsoleColor]::Green } else { [ConsoleColor]::Red }

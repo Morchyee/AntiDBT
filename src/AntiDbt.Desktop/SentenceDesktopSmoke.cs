@@ -35,6 +35,8 @@ internal static class SentenceDesktopSmoke
         var observations = new List<object>();
         var frames = new List<object>();
         var matrixRecords = new List<object>();
+        var dpi = VisualTreeHelper.GetDpi(window);
+        Console.WriteLine($"Desktop layout: session={System.Diagnostics.Process.GetCurrentProcess().SessionId}, interactive={Environment.UserInteractive}, loaded={window.IsLoaded}, dpi={dpi.PixelsPerInchX}x{dpi.PixelsPerInchY}, screen={SystemParameters.PrimaryScreenWidth}x{SystemParameters.PrimaryScreenHeight}, trackMax={SystemParameters.MaximumWindowTrackWidth}x{SystemParameters.MaximumWindowTrackHeight}");
 
         // 1. Unified Subtitle Container Verification (P0 UI regression check)
         window.SetExpanded(false);
@@ -89,22 +91,38 @@ internal static class SentenceDesktopSmoke
         matrixRecords.Add(new { test = "min-bounds", actualWidth = window.ActualWidth, actualHeight = window.ActualHeight });
         Capture(window, Path.Combine(directory, "matrix-compact-min.png"));
 
-        // 2.2 Normal Width & Compact
-        window.Width = 680;
-        window.SizeToContent = SizeToContent.Height;
-        await Task.Delay(100);
-        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-        check("window resize matrix: normal width re-wraps text without horizontal overflow", scroller?.ScrollableWidth == 0);
-        matrixRecords.Add(new { test = "normal-compact", actualWidth = window.ActualWidth, actualHeight = window.ActualHeight });
+        // Exercise both a constrained desktop and the window's usual size limit.
+        double originalMaxWidth = window.MaxWidth;
+        foreach (double maxWidth in new[] { Math.Min(1024, originalMaxWidth), originalMaxWidth }.Distinct())
+        {
+            window.MaxWidth = maxWidth;
 
-        // 2.3 Wide Layout
-        window.Width = 1200;
-        await Task.Delay(100);
-        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-        check("window resize matrix: wide layout expands subtitle area", window.ActualWidth >= 1200);
-        check("window resize matrix: wide layout has no horizontal scrollable width", scroller?.ScrollableWidth == 0);
-        matrixRecords.Add(new { test = "wide-layout", actualWidth = window.ActualWidth, actualHeight = window.ActualHeight });
-        Capture(window, Path.Combine(directory, "matrix-wide.png"));
+            // 2.2 Normal Width & Compact
+            window.Width = 680;
+            window.SizeToContent = SizeToContent.Height;
+            await Task.Delay(100);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            check("window resize matrix: normal width re-wraps text without horizontal overflow", scroller?.ScrollableWidth == 0);
+            double normalWidth = window.ActualWidth;
+            double normalHistoryWidth = window.TestHistory.ActualWidth;
+            matrixRecords.Add(new { test = "normal-compact", maxWidth, actualWidth = normalWidth, actualHeight = window.ActualHeight });
+
+            // 2.3 Wide Layout
+            window.Width = 1200;
+            await Task.Delay(100);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            Console.WriteLine($"Resize matrix: requested=1200, max={maxWidth}, actual={window.ActualWidth}, history={window.TestHistory.ActualWidth}, normal={normalWidth}, normalHistory={normalHistoryWidth}");
+            // WPF also clamps top-level windows to the desktop's native track limit.
+            double widthGrowth = window.ActualWidth - normalWidth;
+            double historyGrowth = window.TestHistory.ActualWidth - normalHistoryWidth;
+            check("window resize matrix: wide layout expands subtitle area",
+                widthGrowth > 0 && historyGrowth > 0 && Math.Abs(historyGrowth - widthGrowth) < 1);
+            check("window resize matrix: wide layout has no horizontal scrollable width", scroller?.ScrollableWidth == 0);
+            matrixRecords.Add(new { test = "wide-layout", maxWidth, actualWidth = window.ActualWidth, actualHeight = window.ActualHeight, historyWidth = window.TestHistory.ActualWidth });
+            Capture(window, Path.Combine(directory, maxWidth == originalMaxWidth ? "matrix-wide.png" : "matrix-wide-constrained.png"));
+        }
+        window.MaxWidth = originalMaxWidth;
 
         // 2.4 Expanded Mode
         window.SetExpanded(true);
