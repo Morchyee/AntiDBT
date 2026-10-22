@@ -2,6 +2,9 @@ using AntiDbt.Core;
 using System.Diagnostics;
 using System.Text.Json;
 
+if (args.Contains("--phase555-only") || args.Contains("--r02-repeat"))
+    return await Phase555Tests.RunCommandAsync(args);
+
 var results = new List<object>(); var failures = 0;
 try { await SentenceContinuityTests.RunAsync(); results.Add(new { name = "confirmed history and exact revision translation are immutable", passed = true }); }
 catch (Exception e) { failures++; results.Add(new { name = "confirmed history and exact revision translation are immutable", passed = false, error = e.Message }); }
@@ -919,6 +922,12 @@ Test("SubtitleStore Clear purges all active segments and reset state", () => {
     store.Clear();
     Check(store.Snapshot().Count == 0, "Store should be empty after Clear()");
 });
+
+foreach (var item in await Phase555Tests.RunCasesAsync(null, null))
+{
+    results.Add(new { name = item.Name, passed = item.Passed, error = item.Error });
+    if (!item.Passed) failures++;
+}
 
 Directory.CreateDirectory("artifacts"); File.WriteAllText("artifacts/core-tests.json", JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(JsonSerializer.Serialize(new { total = results.Count, failures, results }, new JsonSerializerOptions { WriteIndented = true }));

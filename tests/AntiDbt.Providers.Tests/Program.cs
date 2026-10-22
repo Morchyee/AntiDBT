@@ -149,8 +149,13 @@ await Check("SherpaOnnx rejects missing onnx weights", async () => {
 });
 
 await Check("SherpaOnnx real model streams real audio with partial and final results", async () => {
-    var modelDir = Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17");
+    var modelDir = Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-2023-06-21"))
+        ? Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-2023-06-21")
+        : Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17");
     var wavPath = Path.Combine(modelDir, "test_wavs", "0.wav");
+    if (!File.Exists(wavPath) && Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs"))) {
+        wavPath = Path.Combine(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs"), "0.wav");
+    }
     if (!File.Exists(wavPath) || !File.Exists(Path.Combine(modelDir, "tokens.txt")))
         return;
 
@@ -331,8 +336,10 @@ await Check("SherpaOnnx resolves model path with subdirectories", async () => {
     var config = new AsrConfiguration { Provider = "SherpaOnnx", Model = "models/sherpa-onnx" };
     var resolved = SherpaOnnxStreamingAsrProvider.ResolveModelDirectory(config);
     Assert(!string.IsNullOrWhiteSpace(resolved), "resolved path should not be empty");
-    if (Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"))) {
-        Assert(resolved.Contains("sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"), "auto-discovered zipformer subfolder in models directory");
+    if (Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-2023-06-21"))) {
+        Assert(resolved.Contains("sherpa-onnx-streaming-zipformer-en-2023-06-21"), "auto-discovered zipformer 2023-06-21 subfolder in models directory");
+    } else if (Directory.Exists(Path.GetFullPath("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"))) {
+        Assert(resolved.Contains("sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"), "auto-discovered zipformer 20M subfolder in models directory");
     }
 });
 

@@ -29,10 +29,10 @@ try {
     Copy-Item docs/LOCAL_ASR_SETUP.zh-CN.md (Join-Path $package 'docs')
     Copy-Item docs/LOCAL_ASR_SETUP.zh-CN.md (Join-Path $package '本地ASR部署指南.md')
     Copy-Item -LiteralPath licenses -Destination $package -Recurse
-    $model = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17'
+    $model = 'sherpa-onnx-streaming-zipformer-en-2023-06-21'
     $modelTarget = Join-Path $package "models/$model"
     New-Item -ItemType Directory -Path $modelTarget -Force | Out-Null
-    $sources = Get-Content licenses/upstream/ZIPFORMER-20M-SOURCES.json -Raw | ConvertFrom-Json
+    $sources = Get-Content licenses/upstream/ZIPFORMER-2023-06-21-SOURCES.json -Raw | ConvertFrom-Json
     foreach ($file in $sources.files) {
         $source = Join-Path "models/$model" $file.file
         if ((Get-FileHash -LiteralPath $source).Hash -ne $file.sha256) { throw "Model hash mismatch: $source" }

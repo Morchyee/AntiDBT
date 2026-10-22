@@ -153,27 +153,101 @@ public sealed class SubtitleParagraph : INotifyPropertyChanged, IEquatable<Subti
 
 public static class SubtitleProjection
 {
+    private static readonly long MaxSafeAudioTicks = TimeSpan.FromDays(365 * 100).Ticks;
+
+    public static bool IsValidAudioInterval(TimeSpan start, TimeSpan end)
+    {
+        long s = start.Ticks;
+        long e = end.Ticks;
+        return s >= 0 && e > s && e <= MaxSafeAudioTicks;
+    }
+
+    public static bool IsValidAudioStart(TimeSpan start)
+    {
+        long s = start.Ticks;
+        return s >= 0 && s <= MaxSafeAudioTicks;
+    }
+
+    public static bool HasAudioSilenceGap(TimeSpan cumulativeEnd, TimeSpan currentStart, TimeSpan currentEnd, TimeSpan threshold)
+    {
+        if (!IsValidAudioInterval(TimeSpan.Zero, cumulativeEnd) || !IsValidAudioInterval(currentStart, currentEnd))
+            return false;
+
+        long gapTicks = currentStart.Ticks - cumulativeEnd.Ticks;
+        return gapTicks >= threshold.Ticks;
+    }
+
     public static SubtitleParagraph Compact(IReadOnlyList<CaptionSegment> rows, long currentSession = 0)
     {
         if (rows.Count == 0)
             return new("", "");
+
+        var hasSilenceGapBefore = new bool[rows.Count];
+        long currentSessionId = -1;
+        TimeSpan sessionCumulativeEnd = TimeSpan.MinValue;
+        bool hasUnknownSinceCoverage = false;
+
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            if (r.SessionId != currentSessionId)
+            {
+                currentSessionId = r.SessionId;
+                sessionCumulativeEnd = TimeSpan.MinValue;
+                hasUnknownSinceCoverage = false;
+            }
+
+            if (IsValidAudioInterval(r.AudioStart, r.AudioEnd))
+            {
+                if (sessionCumulativeEnd != TimeSpan.MinValue && !hasUnknownSinceCoverage)
+                {
+                    if (HasAudioSilenceGap(sessionCumulativeEnd, r.AudioStart, r.AudioEnd, TimeSpan.FromSeconds(5)))
+                    {
+                        hasSilenceGapBefore[i] = true;
+                    }
+                }
+
+                if (sessionCumulativeEnd == TimeSpan.MinValue || r.AudioEnd > sessionCumulativeEnd)
+                    sessionCumulativeEnd = r.AudioEnd;
+
+                hasUnknownSinceCoverage = false;
+            }
+            else
+            {
+                hasSilenceGapBefore[i] = false;
+                hasUnknownSinceCoverage = true;
+            }
+        }
+
         var tail = new List<CaptionSegment>();
         CaptionSegment? next = null;
+        int nextIndex = -1;
         var length = 0;
-        foreach (var row in rows.Reverse())
+
+        for (int i = rows.Count - 1; i >= 0; i--)
         {
+            var row = rows[i];
             bool sameReplacement = row.TranslationDisplayGroup is not null && row.TranslationDisplayGroup == next?.TranslationDisplayGroup;
-            if (!sameReplacement && next is not null && (row.SessionId != next.SessionId ||
-                StopwatchSeconds(next.ReceivedTimestamp - row.ReceivedTimestamp) >= 5))
-                break;
-            if (!sameReplacement && next is not null && EndsSentence(row.SourceText))
-                break;
+            if (!sameReplacement && next is not null)
+            {
+                if (row.SessionId != next.SessionId)
+                    break;
+
+                if (hasSilenceGapBefore[nextIndex])
+                    break;
+
+                if (EndsSentence(row.SourceText))
+                    break;
+            }
+
             tail.Add(row);
             length += row.SourceText.Length;
             if (length >= 2000)
                 break;
             next = row;
+            nextIndex = i;
         }
+
         tail.Reverse();
         return Join(tail, currentSession);
     }
@@ -183,16 +257,32 @@ public static class SubtitleProjection
         var result = new List<SubtitleParagraph>();
         var group = new List<CaptionSegment>();
         var currentLength = 0;
+        TimeSpan groupCumulativeEnd = TimeSpan.MinValue;
+        bool hasUnknownSinceCoverage = false;
+
         foreach (var row in rows)
         {
-            if (group.Count > 0 && ShouldStartNewParagraph(row, group[^1], currentLength))
+            if (group.Count > 0 && ShouldStartNewParagraph(row, group[^1], currentLength, groupCumulativeEnd, hasUnknownSinceCoverage))
             {
                 result.Add(Join(group, currentSession));
                 group.Clear();
                 currentLength = 0;
+                groupCumulativeEnd = TimeSpan.MinValue;
+                hasUnknownSinceCoverage = false;
             }
             group.Add(row);
             currentLength += row.SourceText.Length;
+            if (IsValidAudioInterval(row.AudioStart, row.AudioEnd))
+            {
+                if (groupCumulativeEnd == TimeSpan.MinValue || row.AudioEnd > groupCumulativeEnd)
+                    groupCumulativeEnd = row.AudioEnd;
+
+                hasUnknownSinceCoverage = false;
+            }
+            else
+            {
+                hasUnknownSinceCoverage = true;
+            }
         }
         if (group.Count > 0)
             result.Add(Join(group, currentSession));
@@ -231,7 +321,13 @@ public static class SubtitleProjection
             canRetry);
     }
 
-    public static bool ShouldStartNewParagraph(CaptionSegment current, CaptionSegment previous, int currentGroupLength)
+    public static bool ShouldStartNewParagraph(CaptionSegment current, CaptionSegment previous, int currentGroupLength) =>
+        ShouldStartNewParagraph(current, previous, currentGroupLength, previous.AudioEnd, !IsValidAudioInterval(previous.AudioStart, previous.AudioEnd));
+
+    public static bool ShouldStartNewParagraph(CaptionSegment current, CaptionSegment previous, int currentGroupLength, TimeSpan groupCumulativeAudioEnd) =>
+        ShouldStartNewParagraph(current, previous, currentGroupLength, groupCumulativeAudioEnd, !IsValidAudioInterval(previous.AudioStart, previous.AudioEnd));
+
+    public static bool ShouldStartNewParagraph(CaptionSegment current, CaptionSegment previous, int currentGroupLength, TimeSpan groupCumulativeAudioEnd, bool hasUnknownSinceCoverage)
     {
         if (current.SessionId != previous.SessionId)
             return true;
@@ -241,10 +337,10 @@ public static class SubtitleProjection
         if (currentGroupLength >= 180)
             return true;
 
-        if (current.AudioStart > previous.AudioEnd && (current.AudioStart - previous.AudioEnd) >= TimeSpan.FromSeconds(2.5))
-            return true;
+        if (hasUnknownSinceCoverage || !IsValidAudioInterval(previous.AudioStart, previous.AudioEnd) || !IsValidAudioInterval(current.AudioStart, current.AudioEnd))
+            return false;
 
-        if (StopwatchSeconds(current.ReceivedTimestamp - previous.ReceivedTimestamp) >= 3.5)
+        if (HasAudioSilenceGap(groupCumulativeAudioEnd, current.AudioStart, current.AudioEnd, TimeSpan.FromSeconds(2.5)))
             return true;
 
         return false;
@@ -317,5 +413,4 @@ public static class SubtitleProjection
     private static bool EndsSentence(string text) => text.TrimEnd().EndsWithAny("。", "？", "！", "…", ".", "?", "!");
     private static bool EndsWithAny(this string text, params string[] suffixes) => suffixes.Any(x => text.EndsWith(x, StringComparison.Ordinal));
 
-    private static double StopwatchSeconds(long ticks) => (double)ticks / System.Diagnostics.Stopwatch.Frequency;
 }

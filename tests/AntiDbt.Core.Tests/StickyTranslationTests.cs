@@ -51,7 +51,7 @@ internal static class StickyTranslationTests
         store.ApplySource(session, Source(1, "new"));
         Visible("");
         store.ApplyTranslation(session, "sticky", 1, "new translation");
-        store.ApplySource(session, Source(1, "next", id: "next"));
+        store.ApplySource(session, new AsrResult("next", 1, "next", false, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), "en"));
         Check(store.Snapshot().Single(x => x.SegmentId == "next").TranslationText == "", "next sentence inherited exact");
         Check(SubtitleProjection.Expanded(new[] { store.Snapshot().Last() }).Single().Translation == "", "next sentence inherited display");
         store.BeginSession(false);

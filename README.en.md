@@ -1,8 +1,8 @@
-# antiDBT · Standalone Real-Time Bilingual Subtitles Client
+# antiDBT - Standalone Real-Time Bilingual Subtitles Client
 
 <p align="center">
-  <b>Minimalist · Ultra-Low Latency · Highly Customizable Real-Time Bilingual Subtitles Floating Desktop App for Windows</b><br>
-  <sub>Independent Open-Source Live Captioning Product · Mix & Match ASR & MT Providers</sub>
+  <b>Independent Real-Time Bilingual Subtitle Overlay Tool Designed for Windows 10/11</b><br>
+  <sub>Open-Source Live Captioning Client · Supports Local Streaming ASR & Multi-Provider Machine Translation</sub>
 </p>
 
 <p align="center">
@@ -15,145 +15,190 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/Release-v0.5.5-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>
 
 ---
 
-## 📖 Introduction
+## Introduction
 
-**antiDBT** is an independently engineered real-time bilingual subtitle floating overlay client designed for Windows 10 and 11. By capturing desktop system audio through Windows WASAPI loopback, combined with voice activity detection (VAD), modern speech-to-text (ASR), and machine translation (MT) services, it renders clean, ultra-responsive bilingual subtitles directly onto your screen.
+antiDBT is an independently developed real-time bilingual subtitle floating overlay application designed for Windows 10 and 11. By capturing system audio output using the Windows WASAPI loopback mechanism, combined with low-latency automatic speech recognition (ASR) and machine translation (MT) services, it renders responsive, well-formatted bilingual subtitles on your desktop.
 
-antiDBT is an independently developed, open-source live captioning product. It is tailored for watching raw foreign videos, international live streams, cross-border virtual meetings, and online learning.
-
----
-
-## ✨ Key Features
-
-### 1. 🛡️ Reliability & Stability Hardening (Phase 5.3 Focus)
-- **Zero Trailing Sentence Loss on Stop**: Stopping capture triggers a bounded drain window where accepted audio blocks, delayed final transcripts, and pending translations are completed and rendered before closing.
-- **Audio Freshness Bounded Buffer & Expiry Pruning**: Bounded queue with 50-chunk nominal capacity (each 6,400-byte PCM chunk represents 200ms audio at 16kHz/16-bit mono, totaling ~10s buffer capacity) and a 2.0-second chunk staleness expiration threshold; stale chunks overflowing due to network bottlenecks are discarded with accurate discontinuity telemetry, preventing latency snowballing.
-- **Ghost Translation Cleanup & Draft Validation**: Stale provisional translations are immediately evicted when source speech revisions clear or invalidate text. Strict prefix-extension compatibility checks guarantee delayed stale responses never pollute active subtitles.
-- **Korean Inter-Word Spacing Preservation**: Resolves syllable-level agglutination issues in streaming buffers, ensuring natural spacing and readable Korean translations.
-- **Continuous Health Retry Budget & Rate-Limit Backoff**: Consecutive connection failures respect a bounded retry budget reset only after continuous healthy streaming. Automatic HTTP 429 extraction strictly honors server `Retry-After` headers, preventing redundant billing and rate throttling.
-- **Granular Status Indication & Silence Diagnostics**:
-  - 🟢 Listening / 🟡 Connecting / 🔴 Error / ⚪ Idle.
-  - When speech recognition works but MT fails, a distinct amber dot (`#FFB300`) signals translation degradation while keeping the Stop button fully functional.
-  - Continuous silence (>3.0s) reports "Connected but no audio signal", clearly decoupling hardware mute from network connectivity failures.
-
-### 2. 🎨 Truly Adjustable Semi-Transparent Floating Overlay (Phase 5.2)
-- **0% to 100% Background Opacity Slider**: Adjust overlay opacity instantly under `Settings → Appearance` with live, non-blocking preview.
-- **Complete Decoupling of Text and Background**: Subtitle text, controls, and status indicators maintain 100% solid, razor-sharp contrast, eliminating blurry fonts.
-- **Real Visual Passthrough & Click-Through Protection**: 12px modern rounded corners reveal background videos clearly while maintaining mouse hit-testing—even at 0% opacity, mouse clicks never accidentally penetrate the window.
-
-### 3. 📐 Elastic Viewport & Dynamic Height Auto-Fill
-- **Vertical Auto-Expansion**: Stretching the window vertically expands the subtitle history viewport to fill the full available height, presenting more conversation context on larger monitors.
-- **Fluid Horizontal Reflow**: Resizing horizontally reflows bilingual text naturally according to available width without clipping or overflowing.
-- **Smart Overlay Anchor**: The "↓ Bottom" quick-scroll badge stays anchored neatly at the bottom-right corner of the subtitle viewport.
-
-### 4. 📜 Silky Smooth Pixel-Level Scrolling & Smart Follow Lock
-- **Sub-Pixel Kinetic Scrolling**: Enjoy smooth precision scrolling with mouse wheels or precision touchpads without jarring page-skips.
-- **Follow-Lock Protection**: Scrolling up to inspect past subtitles automatically pauses auto-scroll. Scrolling back to bottom or clicking "↓ Bottom" resumes it. New arriving subtitles never forcibly snap your view to the bottom while reading.
-
-### 5. ⚙️ Non-Intrusive Settings & Localhost Security Policy
-- **Seamless Settings Interaction**: Opening or canceling the settings dialog never halts active capture or wipes subtitle history. Visual modifications apply immediately; core pipeline reconfigurations trigger an isolated, smooth single restart.
-- **Secure Local LLM Support**: Supports connecting directly to local loopback endpoints (Ollama, LocalAI, LM Studio, or OpenAI-compatible servers at `http://127.0.0.1` / `localhost`) when explicitly allowed, while strictly enforcing HTTPS for remote endpoints.
-
-### 6. 📊 Diagnostic Latency Telemetry
-- Built-in lightweight thread-safe collector tracking `QueueWaitMs`, `AsrServiceMs`, `MtDebounceWaitMs`, `MtServiceMs`, and `UiApplyMs`.
-- One-click anonymized export providing median/p95 percentiles without sensitive API keys, tokens, transcripts, or audio data.
-
-### 7. 🔌 Modular Provider Ecosystem
-- **Speech Recognition (ASR)**: Groq Whisper (ultra-fast cloud), Volcengine ASR 2.0, Azure Speech SDK, Google Cloud Speech V2, etc.
-- **Machine Translation (MT)**: DeepL API, OpenAI-compatible LLMs (Ollama, DeepSeek, GPT-4o, Claude, etc.), Groq LLM, Volcengine MT, Azure Translator, Google Translate, Baidu Translate, Alibaba Cloud MT.
-
-### 8. 🔒 Local Credential Protection
-- All API keys, secrets, and connection parameters are encrypted using **Windows DPAPI (Data Protection API)** bound to your Windows user identity and saved to `data/settings.json`. Keys never leave your machine.
+The software is designed for watching foreign videos, technical presentations, international conferences, webinars, and live streams.
 
 ---
 
-## 🖥️ System Requirements
+## Core Features
 
-- **Operating System**: Windows 10 / Windows 11 (x64)
-- **Audio Architecture**: Any soundcard/device supporting WASAPI loopback (standard system output, speakers, headphones)
-- **Portable Runtime**: The binary release includes a self-contained .NET 10 runtime; **no separate .NET SDK or runtime installation is required for end users**. This release uses .NET 10.
+### 1. Subtitle State Machine & Semantic Ordering (Phase 5.5.5)
+- **Dynamic Timeline Ordering**: Solves packet arrival reordering caused by network jitter or asynchronous request execution. Subtitles are dynamically sorted using acoustic time anchors to prevent flickering or jitter.
+- **Sticky Translation Lifecycle**: Smoothly retains existing valid translation context during active speech streaming revisions, eliminating blank translation gaps before final results arrive.
+- **Group Revision Consistency**: Obsolete or superseded translation requests are cleanly evicted when source speech prefixes undergo semantic merges or splits, ensuring the active viewport remains strictly synchronized with the underlying state.
+- **Stable Sentence Segmentation & Paragraph Joining**: Combines acoustic silence detection and punctuation heuristics to join continuous speech into coherent paragraphs while neatly splitting at prolonged pauses.
+
+### 2. Reliability & Stability Hardening
+- **Zero Trailing Sentence Loss on Stop**: Stopping capture enters a bounded drain period where queued audio chunks, delayed final transcriptions, and corresponding translations are fully rendered before shutting down.
+- **Bounded Buffer with Freshness Expiration**: Employs a bounded audio queue with freshness expiration thresholds to prune outdated audio chunks during network backpressure, preventing latency snowballing.
+- **Adaptive Rate-Limit Backoff**: Identifies HTTP 429 status codes and honors server `Retry-After` headers, avoiding wasted retries and excessive quota consumption.
+
+### 3. Adjustable Semi-Transparent Floating Overlay
+- **0% to 100% Background Opacity**: Adjust background transparency freely via a slider in the appearance settings with immediate effect.
+- **Decoupled Text Rendering**: Subtitle text and interface controls remain fully opaque with sharp contrast regardless of background opacity.
+- **Visual Passthrough with Hit-Testing**: Background content remains visible through the translucent window, while mouse hit-testing remains active across the window area to prevent accidental clicks through to background applications.
+
+### 4. Viewport Layout & Smooth Scrolling
+- **Dynamic Full-Height Layout**: Expanding the window vertically expands the subtitle history viewport to utilize available space, reflowing text naturally according to width without clipping.
+- **Sub-Pixel Kinetic Scrolling**: Supports smooth scrolling using mouse wheels or precision touchpads.
+- **Smart Auto-Follow Lock**: Scrolling up to inspect past subtitles automatically pauses auto-scrolling; scrolling back to the bottom or clicking the bottom badge resumes auto-following without forcibly snapping the view while reading.
+
+### 5. Modular Provider Architecture & Local Credential Security
+- **Speech Recognition (ASR)**: Built-in local offline streaming recognition (Sherpa-ONNX Zipformer), Groq Whisper, Volcengine ASR 2.0, Azure Speech SDK, etc.
+- **Machine Translation (MT)**: DeepL API, OpenAI-compatible endpoints (Groq, Ollama, DeepSeek, GPT, etc.), Volcengine MT, Azure Translator, Google Translate, etc.
+- **Local DPAPI Encryption**: All API keys and credentials are encrypted using Windows DPAPI bound to the current Windows user account and saved in `data/settings.json`, never uploaded to the cloud.
 
 ---
 
-## 🚀 Quick Start
+## Local English Speech Recognition (Sherpa-ONNX Zipformer)
 
-### 1. Download & Launch
-1. Download the latest `antiDBT-v0.5.5-beta.4-win-x64-full.zip` from [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases).
-2. Extract the archive into any preferred directory (e.g. `D:\Tools\antiDBT\`).
-3. Run `antiDBT.exe`.
+The official full release (`antiDBT-v0.5.5-win-x64-full.zip`) includes the pre-validated default local English speech recognition model: **`sherpa-onnx-streaming-zipformer-en-2023-06-21`** (INT8 quantized).
 
-### 2. Configure Providers
-1. Click the **⚙** gear icon on the top right.
-2. **Speech Recognition**: Select your preferred ASR provider (e.g. `GroqWhisper` or `VolcengineAsr2`) and enter your API Key.
-3. **Translation**: Select your MT provider (e.g. `DeepL` or `OpenAiCompatible`), entering credentials and target model.
-4. **Appearance**: Choose Dark/Light theme and set your background opacity (recommended: 70% ~ 85%).
-5. Click **Save Settings**.
+### Advantages & Limitations
+- **Advantages**:
+  - Transcription accuracy is markedly superior to the older 20M model, accurately recognizing complex sentence structures and conversational vocabulary.
+  - Maintains near-instantaneous streaming partial preview latency.
+  - Runs entirely on standard x64 CPUs with a stable memory footprint (~260 MB observed in real use), requiring no ASR API keys and incurring zero cloud usage costs.
+- **Limitations**:
+  - English speech recognition only; spoken Chinese or other languages cannot be transcribed by this model.
+  - Audio quality directly affects transcription; heavy background noise, simultaneous speakers, or strong accents may degrade accuracy.
+  - Chinese translation operates as an independent stage and requires configuring a translation service (such as Groq, DeepL, or local Ollama).
 
-### 3. Start Captioning
-- Click **Start** in the toolbar.
-- Play any video, stream, podcast, or virtual meeting audio on your PC to view realtime bilingual captions.
-- Want to preview typography without consuming API quotas? Right-click the window and select **Local Demo** for synthetic testing.
+### Local ASR vs. Cloud Translation
+antiDBT strictly separates the processing pipeline into two independent stages:
+1. **ASR Stage (Audio -> Text)**: When using local Sherpa-ONNX, audio is processed locally on CPU with zero network traffic and zero API keys.
+2. **MT Stage (Source Text -> Target Text)**:
+   - When source and target languages are both set to `en` (pass-through mode), no translation service is invoked, providing 100% offline operation.
+   - When target language is set to `zh`, recognized text is transmitted via HTTPS to the configured translation service.
+
+### Official Model Download & Manual Installation
+If using a slim package without bundled models:
+- **Official Download URL**: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-21.tar.bz2
+- **Installation Path**: Extract and place into `antiDBT\models\sherpa-onnx-streaming-zipformer-en-2023-06-21\`.
+- **Required Files**:
+  - `encoder-epoch-99-avg-1.int8.onnx`
+  - `decoder-epoch-99-avg-1.int8.onnx`
+  - `joiner-epoch-99-avg-1.int8.onnx`
+  - `tokens.txt`
 
 ---
 
-## 🛠️ Building & Verification from Source
+## Translation Service Configuration
 
-Written in C# 14 and .NET 10 WPF. The repository contains a `global.json` locking the toolchain to SDK 10.0.402 for deterministic builds.
+Open the settings panel via the gear icon in the top right:
+
+### 1. Groq (Fast LLM-Based Translation)
+1. Obtain an API key from https://console.groq.com.
+2. Under Translation Provider, select `OpenAiCompatible`.
+3. Set Endpoint to `https://api.groq.com/openai/v1/chat/completions`.
+4. Set Model to `llama-3.3-70b-versatile` or `llama-3.1-8b-instant`.
+5. Enter your API Key, set Source Language to `en`, Target Language to `zh`, and save.
+
+### 2. DeepL (High-Quality Machine Translation)
+1. Register at https://www.deepl.com and obtain an API key (supports DeepL API Free and Pro).
+2. Under Translation Provider, select `DeepL`.
+3. Enter your API Key (the software automatically switches endpoints based on the `:fx` suffix).
+4. Set Source Language to `en`, Target Language to `zh`, and save.
+
+### 3. Local LLM (Ollama, LM Studio)
+1. Start your local Ollama service (e.g. `ollama run qwen2.5:7b`).
+2. Enable "Allow Local Loopback" in antiDBT settings.
+3. Select `OpenAiCompatible`, set Endpoint to `http://127.0.0.1:11434/v1/chat/completions`, and enter the model name for complete offline translation.
+
+---
+
+## System Requirements
+
+- **Operating System**: Windows 10 64-bit (Version 1903 / Build 18362 or higher) or Windows 11 64-bit.
+- **Audio Architecture**: Any soundcard or audio device supporting WASAPI loopback capture (Shared Mode required).
+- **Runtime Environment**: The release package bundles a self-contained .NET 10 x64 runtime and Sherpa-ONNX native binaries. **End users do not need to install .NET SDK, .NET Runtime, Python, Go, CUDA, or C++ build tools.**
+
+---
+
+## Download, Installation & Upgrade
+
+### Initial Setup & Launch
+1. Download the official stable release from [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases):
+   - Package: `antiDBT-v0.5.5-win-x64-full.zip`
+   - Checksum: `antiDBT-v0.5.5-win-x64-full.sha256`
+2. Extract the archive into a non-restricted local folder (e.g., `D:\Tools\antiDBT\`).
+3. Enter the extracted `antiDBT` folder and launch `antiDBT.exe`.
+4. Open settings to verify your audio output device and provider configurations, save, and click "Start".
+
+### Verifying Checksum (PowerShell)
+```powershell
+Get-FileHash -Path "antiDBT-v0.5.5-win-x64-full.zip" -Algorithm SHA256
+```
+
+### Upgrading
+1. Completely exit any running antiDBT process.
+2. Extract the new version into a clean directory.
+3. To retain existing configurations and credentials, copy `data/settings.json` from the old version into the new version's `data/` directory (on the same machine and user account). Avoid in-place overwrites while the software is active.
+
+---
+
+## Building from Source & Testing
+
+The project is built using C# 14 and .NET 10 WPF, with `global.json` locking the SDK version to guarantee deterministic builds.
 
 ### Prerequisites
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 recommended)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Windows 10/11 x64
-- PowerShell 7 (`pwsh`)
+- PowerShell
 
-### Build Commands
+### Commands
 ```powershell
-# Clone the repository
+# Clone repository
 git clone https://github.com/Morchyee/AntiDBT.git
-cd AntiDBT
+cd AntiDBT/prototype
 
-# Build Release binaries
+# Release build
 dotnet build AntiDbt.sln -c Release
 
-# Run the complete 12-suite automated verification suite
+# Run complete 12-suite automated verification
 pwsh -File scripts/verify-all.ps1 -SkipRestore
 
-# Package a self-contained portable distribution with SHA256 checksums
-pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.3-beta"
+# Build distribution package
+pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.5"
 ```
 
 ---
 
-## ⚠️ Known Limitations & Testing Boundaries
+## Verification & Operational Boundaries
 
-1. **Cloud API Credentials**: Active speech recognition and translation require valid API keys from your chosen providers.
-2. **Testing vs. Live Service Boundaries**: The 100% pass rate in our local 12-suite regression harness and CI smoke tests proves internal state machine, audio loopback, and UI contract correctness, but **does not guarantee external cloud provider uptime, network resilience, or quota availability during 24/7 continuous operation**. Live performance depends on external API health and network connectivity.
-3. **WASAPI Exclusive Mode**: If an audio player or DAW runs in Exclusive Mode, WASAPI loopback capture may be blocked; ensure shared audio mode is selected.
-4. **Firewall Prompt**: Allow antiDBT through Windows Defender Firewall when prompted so that outbound API requests can connect.
+### Automated Verification
+- All 12 test suites (Core, Windows, CloudSpeech, Providers, Domestic, WPF Desktop Smoke, Diagnostics) comprising 125 unit and regression tests pass at 100%.
+- Includes regression validation for Phase 5.5.5 state machine consistency, dynamic timeline ordering, and sticky translation lifecycles.
+- Validated with real Zipformer INT8 model execution on streaming audio with verified transcription accuracy.
 
----
-
-## 🛡️ Privacy & Data Security
-
-- **Zero Tracking**: antiDBT has no central telemetry servers, tracking scripts, or analytics collection.
-- **Direct P2P Requests**: Audio blocks and text flow exclusively between your computer and the third-party API endpoints you explicitly configure.
-- **DPAPI Encryption**: Secrets are encrypted at the OS level using your local Windows credentials.
+### Operational Boundaries
+- **WASAPI Exclusive Mode**: If an audio player claims exclusive WASAPI ownership, system loopback cannot capture the audio; switch output to Shared Mode.
+- **Cloud Service Outages**: The client enforces strict timeouts and backoff strategies, but third-party API availability and quotas remain subject to provider operations.
+- **Specialized Audio Interfaces**: Dedicated ASIO hardware or virtual audio buses (e.g., Voicemeeter) may require manual configuration of the loopback recording source.
 
 ---
 
-## ⚖️ Disclaimer
+## Privacy, License & Disclaimer
 
-1. **Independent Product**: **antiDBT** is an independently developed, open-source live captioning product.
-2. **Usage Compliance**: Users are responsible for their own network traffic, API consumption, costs, and compliance with the Terms of Service of their chosen third-party providers.
-
----
-
-## 📄 License
-
-antiDBT is licensed under the [MIT License](LICENSE). Third-party dependencies and notices are documented in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- **Privacy**: antiDBT contains no central servers, telemetry tracking, or background analytics. Audio and text data are processed locally or routed directly to user-configured API endpoints.
+- **Credential Storage**: API credentials are encrypted locally using Windows DPAPI and cannot be decrypted under different user accounts.
+- **Open-Source License**: antiDBT source code is licensed under the [MIT License](LICENSE).
+- **Third-Party Notices**:
+  - Sherpa-ONNX (Apache-2.0)
+  - ONNX Runtime (MIT)
+  - NAudio (MIT)
+  - Microsoft Cognitive Services Speech SDK (Runtime License)
+  - Google Cloud Speech Client (Apache-2.0)
+  - Zipformer model weights and model card are distributed under Apache-2.0.
+  - Detailed third-party notices are provided in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- **Disclaimer**: Software is provided "AS IS" without warranty of any kind. Subtitle transcription and translation outputs depend on upstream model capabilities and should be used for reference purposes only.

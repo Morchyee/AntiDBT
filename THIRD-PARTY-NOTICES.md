@@ -19,8 +19,10 @@ For packages without a license text in the NuGet root, `licenses/upstream` also 
 This independent prototype does not distribute Doubao application binaries, code or assets. Cloud services are separately configured by the user; this software has no bundled service credentials.
 
 
-## Bundled Sherpa-ONNX English Zipformer 20M model
+## Bundled Sherpa-ONNX English Zipformer Model
 
-The unmodified int8 encoder, decoder, joiner and tokens are from the official k2-fsa/sherpa-onnx asr-models release. The exported model card (csukuangfj) declares Apache-2.0 and credits desh2608/icefall-asr-librispeech-pruned-transducer-stateless7-streaming-small. Both sources are recorded in licenses/upstream/ZIPFORMER-20M-SOURCES.json with SHA256 hashes verified against the downloaded official archive. The archive contains no LICENSE or NOTICE file. We retain the upstream model card and supply the full Apache-2.0 text in licenses/upstream/SHERPA-ONNX-APACHE-2.0.txt. Only required model files are redistributed; test audio and export scripts are omitted. antiDBT's MIT license does not relicense the model.
+The default bundled local English speech recognition model is sherpa-onnx-streaming-zipformer-en-2023-06-21 from the official k2-fsa/sherpa-onnx asr-models release (https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-21.tar.bz2).
+
+The model is distributed under the Apache License 2.0. The upstream TorchScript model is derived from marcoyang/icefall-libri-giga-pruned-transducer-stateless7-streaming-2023-04-04 with training code from k2-fsa/icefall (PR #984). Unmodified INT8 quantized encoder (ncoder-epoch-99-avg-1.int8.onnx), decoder (decoder-epoch-99-avg-1.int8.onnx), joiner (joiner-epoch-99-avg-1.int8.onnx), and 	okens.txt are included. Model sources and SHA256 checksums are documented in licenses/upstream/ZIPFORMER-2023-06-21-SOURCES.json, the model card is retained in licenses/upstream/ZIPFORMER-2023-06-21-MODEL-CARD.md, and the full Apache-2.0 license text is provided in licenses/upstream/SHERPA-ONNX-APACHE-2.0.txt. antiDBT's MIT license does not relicense the model.
 
 Sherpa-ONNX runtime is distributed under Apache-2.0; package legal metadata is retained in licenses/packages. ONNX Runtime uses MIT; its full license and ThirdPartyNotices are fetched from the upstream v1.28.2 tag, matching the bundled DLL ProductVersion. .NET and WindowsDesktop legal texts come from the SDK runtime packs used for this build.

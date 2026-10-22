@@ -1,11 +1,8 @@
-# antiDBT · 独立实时双语字幕客户端
-
-本次运行要求 Windows 10 1903（Build 18362）及以上或 Windows 11。本地英文 ASR 完整版包含 Sherpa-ONNX Zipformer 20M int8 模型，无需 Groq Key、SDK、Python 或 Go。[完整中文部署教程](docs/LOCAL_ASR_SETUP.zh-CN.md)。中文翻译需另行配置 MT 服务。
-
+# antiDBT - 独立实时双语字幕客户端
 
 <p align="center">
-  <b>极简 · 低延迟 · 高度自定义的 Windows 桌面实时双语字幕工具</b><br>
-  <sub>独立开源实时字幕产品 · 支持多 Provider 自由组合</sub>
+  <b>专为 Windows 10/11 设计的独立桌面实时双语字幕工具</b><br>
+  <sub>开源实时字幕客户端 · 支持本地流式语音识别与多 Provider 机器翻译组合</sub>
 </p>
 
 <p align="center">
@@ -18,145 +15,192 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6.svg?logo=windows" alt="Platform">
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4.svg?logo=dotnet" alt=".NET 10.0">
-  <img src="https://img.shields.io/badge/Release-v0.5.5--beta.4-green.svg" alt="Release">
+  <img src="https://img.shields.io/badge/Release-v0.5.5-green.svg" alt="Release">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg?logo=githubactions" alt="CI">
 </p>
 
 ---
 
-## 📖 项目简介
+## 项目简介
 
-**antiDBT** 是一个专为 Windows 10/11 设计与实现的独立桌面实时双语字幕悬浮窗客户端。通过 Windows WASAPI 系统音频回环捕获电脑正在播放的声音，结合低延迟语音识别（ASR）与机器翻译（MT）服务，在屏幕上呈现纯净、低延迟、自然排版的双语对照字幕。
+antiDBT 是一个专为 Windows 10/11 设计的独立桌面实时双语字幕客户端。通过 Windows WASAPI 系统音频回环捕获系统当前播放的声音，结合低延迟语音识别（ASR）与机器翻译（MT）服务，在桌面呈现低延迟、排版自然的双语对照字幕。
 
-antiDBT 是独立开发的开源实时字幕产品，专为生肉视频观看、外语直播翻译、跨国远程会议、网课学习等高频视听场景打造。
-
----
-
-## ✨ 核心特性
-
-### 1. 🛡️ 可靠性与稳定性硬化 (Phase 5.3 专项演进)
-- **停止尾句零丢失**：点击“停止”时进入有界排空期（Bounded Drain），已入队的音频片段与延迟 Final 转写及对应翻译完整呈现后再安全关闭，彻底杜绝丢末尾句。
-- **音频时效性有界缓冲与超期丢弃**：引入名义容量为 50 个音频块（每块 6,400 字节，在 16kHz/16-bit 单声道下对应 200ms 音频，队列名义容量约 10 秒）的有界缓冲区与 2.0 秒音频块过期清理阈值；发生网络瞬态拥堵导致积压时，超期音频块自动丢弃并记录断续统计，杜绝延迟无限滚雪球。
-- **幽灵译文清除与草稿兼容校验**：当 ASR 将原文修正为空或发生语义颠覆时，强制清空失效的历史译文；建立严格的前缀扩展与修订版本隔离校验，迟到旧结果无法污染当前字幕。
-- **韩文词间空格精准保护**：彻底修复多音节韩文片段在流式流转中词间空格被误删的问题，韩语听译语义清晰连贯。
-- **连续稳定期重试预算与限流退避**：单次发送音频成功不再清空重试预算，只有建立连接后持续健康收发才重置预算；自动识别 HTTP 429 并严格遵循服务商返回的 `Retry-After` 冷却期，杜绝无效重试与多余扣费。
-- **细分状态指示与静音诊断**：
-  - 🟢 聆听中 / 🟡 连接中 / 🔴 异常 / ⚪ 就绪。
-  - 翻译服务异常但识别正常时展示琥珀色指示（#FFB300），保持“停止”按钮语义正常可用。
-  - 音频连续静音超过 3.0s 明确诊断为“已连接但无音频信号”，绝不将设备静音误判为网络断线。
-
-### 2. 🎨 真正的可调半透明悬浮窗 (Phase 5.2 核心特性)
-- **0%～100% 背景不透明度自由调节**：在“设置 → 外观”中通过滑块随时调整，免重启无感知实时生效。
-- **背景与文字彻底解耦**：原文、译文、按钮及图标始终保持 100% 实体高对比度清晰渲染，告别全局模糊。
-- **真实透视与防点击穿透**：12px 现代平滑圆角，透过背景看清后方视频；即便调至 0% 透明度，底层鼠标命中测试依然有效，绝不意外穿透误触后方窗口。
-
-### 3. 📐 弹性视口与空间全高自适应
-- **纵向全高动态填充**：窗口向下拉长时，历史字幕区域全高自动填充，大屏可浏览更多历史上下文，消除无意义留白死区。
-- **横向自然折行重排**：横向拖动缩放时，原文与译文依据最新视口宽度自然折行，文字绝不溢出或裁切。
-- **「↓ 回到底部」智能锚定**：浮动悬徽精准锚定于字幕视口右下方（Overlay），不再随窗口高度漂移至窗口中央。
-
-### 4. 📜 丝滑像素级滚动与智能跟随
-- **像素级滚动平滑阻尼**：支持鼠标滚轮与笔记本触控板微小 Delta 丝滑位移，消除跳页顿挫感。
-- **智能跟随锁**：向上滚动翻阅历史时**自动暂停滚动跟随**；回到最底或点击「↓ 回到底部」时**自动恢复跟随**。新字幕到达或窗口缩放时**绝不强拉底部**，保障回看体验不受打扰。
-
-### 5. ⚙️ 非侵入式设置面板与端点安全
-- **无感设置体验**：打开或取消设置面板**不停止音频采集、不清空历史字幕**；仅改变外观参数原地生效；仅在修改核心采集参数时执行单次受控平滑重启。
-- **本地大模型安全接入**：在显式启用本地回环允许时，支持直接接入本地部署的 Ollama、LocalAI、LM Studio 或 OpenAI 兼容端点（`http://127.0.0.1` / `localhost`）；针对外部云端端点严格要求 HTTPS 并拒绝携带敏感 userinfo。
-
-### 6. 📊 细分时延度量模型 (Telemetry)
-- 内置轻量级线程安全时延度量收集器，细分记录 `QueueWaitMs`（队列等待）、`AsrServiceMs`（语音识别耗时）、`MtDebounceWaitMs`（去抖等待）、`MtServiceMs`（翻译耗时）及 `UiApplyMs`（界面呈现耗时）。
-- 一键脱敏导出 JSON 诊断样例，默认严禁包含任何密钥、Token、请求签名、原文文本、译文或原始音频。
-
-### 7. 🔌 模块化 Provider 架构
-- **语音识别（ASR）**：支持 Groq Whisper（超低延迟）、火山语音 ASR 2.0、Azure Speech SDK、Google Cloud Speech V2 等。
-- **机器翻译（MT）**：支持 DeepL API、OpenAI 兼容大模型（Ollama、DeepSeek、GPT-4o、Claude 等）、Groq LLM、火山 MT、Azure Translator、Google Basic、百度翻译、阿里云翻译等。
-
-### 8. 🔒 本地凭据安全
-- 所有 API Key、Secret、密码均经由 **Windows DPAPI（Data Protection API）** 采用当前用户专属加密密钥存储于本地 `data/settings.json`，绝不上云、绝不向第三方泄露。
+软件适用于外语视频播放、技术演讲、远程会议、网课及外语直播等视听场景。
 
 ---
 
-## 🖥️ 运行环境要求
+## 核心特性
 
-- **操作系统**：Windows 10 / Windows 11 (x64)
-- **音频架构**：支持 WASAPI 回环采集的声卡/音频设备（系统默认扬声器/耳机）
-- **便携包运行时**：发布包内置独立自包含 .NET 10 运行时，**终端用户无需单独安装 .NET SDK 或运行库**。当前发布使用 .NET 10。
+### 1. 字幕状态机与语义排序演进（Phase 5.5.5）
+- **动态时间线保序**：针对网络抖动或异步请求导致的到达乱序问题，采用基于音频时间锚点的动态排序机制，消除字幕跳变与闪烁。
+- **粘性翻译上下文（Sticky Translation）**：在语音识别流式修正期间，平滑保留前序句子的有效译文上下文，避免在新译文到达前界面闪烁或出现译文短暂空白。
+- **分组修订一致性隔离**：当语音识别前缀发生语义合并、拆分或修正时，精确回收过期翻译请求，确保展示视口与底层数据状态严格同步。
+- **智能分句与段落衔接**：结合声学静音阈值与标点断句算法，对连续语音自然聚合成段，长停顿时平滑划分段落。
+
+### 2. 可靠性与稳定性硬化
+- **停止尾句完整排空**：点击停止后进入有界排空阶段（Bounded Drain），已入队的音频片段与对应的终态转写及翻译完整呈现后再安全退出，避免截断尾句。
+- **有时效的有界音频缓冲**：设置有界缓冲队列与超时丢弃机制，在网络发生严重拥堵时主动丢弃超期音频块，避免延迟持续滚雪球。
+- **自适应重试与退避**：精准识别 HTTP 429 限流并遵循服务商返回的 `Retry-After` 头，避免无效重复请求与额度消耗。
+
+### 3. 可调半透明悬浮窗
+- **0%～100% 背景不透明度调节**：在设置中实时滑动调节背景透明度，立即生效。
+- **背景与文字独立渲染**：即便背景完全透明，字幕文字依然保持高对比度实体渲染，清晰易读。
+- **透视与防穿透保护**：支持透过半透明背景看清后方视频画面；窗口区域保持正常鼠标事件响应，避免意外穿透点击后方窗口。
+
+### 4. 视口排版与平滑滚动
+- **视口全高自适应**：拉长窗口时历史字幕区域自动填充可用空间，根据宽度自然折行，文字不溢出、不裁切。
+- **像素级平滑滚动**：支持滚轮与触摸板平滑位移。
+- **智能跟随锁**：向上滚动浏览历史时自动暂停滚动跟随；滚动到底部或点击底部浮标时恢复自动跟随，新字幕到达时不强行打断用户回看。
+
+### 5. 模块化 Provider 架构与本地凭据安全
+- **语音识别（ASR）**：支持内置离线流式识别（Sherpa-ONNX Zipformer）、Groq Whisper、火山引擎语音 ASR 2.0、Azure Speech SDK 等。
+- **机器翻译（MT）**：支持 DeepL API、OpenAI 兼容端点（Groq、Ollama、DeepSeek、GPT 等）、火山引擎翻译、Azure Translator、Google 翻译等。
+- **本地 DPAPI 加密存储**：所有 API Key 与敏感配置均经由 Windows DPAPI 基于当前用户账户加密存储于本地 `data/settings.json`，不上传云端。
 
 ---
 
-## 🚀 快速上手
+## 本地英文语音识别（Sherpa-ONNX Zipformer）
 
-### 1. 下载与运行
-1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下载最新版本的 `antiDBT-v0.5.5-beta.4-win-x64-full.zip`。
-2. 解压压缩包到本地任意目录（例如 `D:\Tools\antiDBT\`）。
-3. 双击解压目录中的 `antiDBT.exe` 即可启动。
+正式完整版（`antiDBT-v0.5.5-win-x64-full.zip`）内置了官方验证的默认本地英文识别模型：**`sherpa-onnx-streaming-zipformer-en-2023-06-21`**（INT8 量化）。
 
-### 2. 配置翻译与语音识别服务
-1. 点击窗口右上角的设置图标 **⚙**。
-2. **语音识别**：选择所希望使用的 Provider（推荐 `GroqWhisper` 或 `VolcengineAsr2`），输入 API Key。
-3. **翻译服务**：选择翻译 Provider（推荐 `DeepL` 或 `OpenAiCompatible` 并配合高速模型），填入 API Key 与端点。
-4. **外观设置**：可切换“暗色 / 浅色 / 跟随系统”主题，并拖动**“背景不透明度”**滑块调整悬浮窗透明度（建议 70%～85%）。
-5. 点击“保存设置”。
+### 优势与局限
+- **优势**：
+  - 识别准确率相较旧版 20M 模型有显著提升，能够完整转录复杂句子与日常语汇。
+  - 维持毫秒级流式初态预览响应速度。
+  - 完全在本地 CPU 上运行，内存占用平稳（实际运行约为 260 MB 级别），无需配置 ASR API Key，无云端调用费用。
+- **局限**：
+  - 本模型为英文专用流式识别模型，仅支持英文输入，不支持中文语音识别。
+  - 重度依赖音频清晰度；复杂背景噪音、重叠人声或强口音场景下准确率会有所下降。
+  - 中文翻译属于独立处理阶段，仍需配合配置翻译服务（如 Groq、DeepL 或本地 Ollama）。
 
-### 3. 开始使用
-- 点击工具栏的 **“开始”** 按钮。
-- 电脑播放任何视频、直播、播客、会议或网课音频，主窗口即可实时浮现双语字幕。
-- 想要体验排版而暂不消耗 API 额度？在主窗口右键选择**“本地演示”**，将以本地合成事件测试排版与滚动。
+### 本地 ASR 与云端翻译的区别
+antiDBT 将处理流程严格划分为独立的两个阶段：
+1. **ASR 阶段（音频 -> 文本）**：若选用本地 Sherpa-ONNX，音频完全在本地 CPU 推理，零网络流量，零 API Key 依赖。
+2. **MT 阶段（原文 -> 译文）**：
+   - 若源语言与目标语言均设为 `en`（直通模式），系统不调用任何翻译服务，实现 100% 离线使用。
+   - 若目标语言设为 `zh`，系统将识别出的文本通过 HTTPS 请求发送至配置的翻译服务。
+
+### 官方模型来源与手动安装
+若使用未携带模型的轻量版本，可手动配置模型：
+- **官方下载地址**：https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-21.tar.bz2
+- **解压路径**：解压后将文件夹置于 `antiDBT\models\sherpa-onnx-streaming-zipformer-en-2023-06-21\`。
+- **关键文件清单**：
+  - `encoder-epoch-99-avg-1.int8.onnx`
+  - `decoder-epoch-99-avg-1.int8.onnx`
+  - `joiner-epoch-99-avg-1.int8.onnx`
+  - `tokens.txt`
+详细操作可参阅 [本地语音识别配置指南](docs/LOCAL_ASR_SETUP.zh-CN.md)。
 
 ---
 
-## 🛠️ 源码构建与测试
+## 常用翻译服务配置
 
-本项目采用 C# 14 与 .NET 10 WPF 编写，已配置 `global.json` 锁定 SDK 10.0.402 以实现确定性构建。
+点击主窗口右上角设置图标（⚙）打开设置面板进行配置：
 
-### 依赖环境
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (10.0.402 推荐)
+### 1. Groq（低延迟大模型翻译）
+1. 前往 https://console.groq.com 获取 API Key。
+2. 翻译服务选择 `OpenAiCompatible`。
+3. 接口端点填写：`https://api.groq.com/openai/v1/chat/completions`。
+4. 模型名称填写：`llama-3.3-70b-versatile` 或 `llama-3.1-8b-instant`。
+5. 填入 API Key，源语言设为 `en`，目标语言设为 `zh`，保存即可。
+
+### 2. DeepL（专业机器翻译）
+1. 前往 https://www.deepl.com 注册获取 API Key（支持 DeepL API Free 与 Pro）。
+2. 翻译服务选择 `DeepL`。
+3. 填入 API Key（程序根据密钥末尾 `:fx` 自动切换免费版与专业版端点）。
+4. 源语言设为 `en`，目标语言设为 `zh`，保存即可。
+
+### 3. 本地大模型（Ollama 等）
+1. 启动本地 Ollama 服务（例如运行 `ollama run qwen2.5:7b`）。
+2. 在设置中开启“允许本地回环”。
+3. 翻译服务选择 `OpenAiCompatible`，端点填写 `http://127.0.0.1:11434/v1/chat/completions`，填入对应模型名即可完全离线翻译。
+
+---
+
+## 系统要求
+
+- **操作系统**：Windows 10 64 位（版本 1903 / 内部版本 18362 及以上）或 Windows 11 64 位。
+- **音频架构**：支持 WASAPI 回环捕获的声卡或音频设备（需工作在共享模式 Shared Mode）。
+- **运行依赖**：发布包内置独立自包含的 .NET 10 x64 运行时与 Sherpa-ONNX 原生动态库。**终端用户无需安装 .NET SDK、.NET Runtime、Python、Go、CUDA 或 C++ 编译环境。**
+
+---
+
+## 下载、安装与升级
+
+### 首次下载与运行
+1. 前往 [GitHub Releases](https://github.com/Morchyee/AntiDBT/releases) 下载正式稳定版：
+   - 完整包：`antiDBT-v0.5.5-win-x64-full.zip`
+   - 校验文件：`antiDBT-v0.5.5-win-x64-full.sha256`
+2. 使用系统自带解压功能或 7-Zip 将压缩包解压至非系统受限目录（例如 `D:\Tools\antiDBT\`）。
+3. 进入解压生成的 `antiDBT` 文件夹，双击 `antiDBT.exe` 启动。
+4. 首次启动请进入设置确认音频设备与 Provider 配置，保存后点击“开始”即可。
+
+### 校验文件完整性（PowerShell）
+```powershell
+Get-FileHash -Path "antiDBT-v0.5.5-win-x64-full.zip" -Algorithm SHA256
+```
+将计算出的哈希值与发布的 `.sha256` 文件内容核对。
+
+### 软件升级
+1. 完全退出正在运行的旧版本 antiDBT。
+2. 将新版本 ZIP 解压至新目录。
+3. 若需继承历史配置与凭据，可将旧版本目录下的 `data/settings.json` 复制到新版本的 `data/` 目录中（前提为在同一台计算机的同一 Windows 用户下操作，因 DPAPI 绑定用户账号）。请勿在运行状态下原地覆盖文件。
+
+---
+
+## 源码构建与测试
+
+本项目采用 C# 14 与 .NET 10 WPF 构建，使用 `global.json` 锁定 SDK 版本以保证确定性构建。
+
+### 开发依赖
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Windows 10/11 x64
-- PowerShell 7 (`pwsh`)
+- PowerShell
 
-### 构建命令
+### 构建与测试命令
 ```powershell
 # 克隆仓库
 git clone https://github.com/Morchyee/AntiDBT.git
-cd AntiDBT
+cd AntiDBT/prototype
 
-# 编译整个解决方案 (Release)
+# Release 编译
 dotnet build AntiDbt.sln -c Release
 
-# 运行全量 12 项自动化验证套件 (涵盖单元测试、协议契约、WPF UI自动化、性能基准)
+# 运行全套 12 项自动化验证套件
 pwsh -File scripts/verify-all.ps1 -SkipRestore
 
-# 打包构建 self-contained 单文件自包含便携包
-pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.3-beta"
+# 构建正式分发安装包
+pwsh -File scripts/build-candidate-package.ps1 -Version "0.5.5"
 ```
 
 ---
 
-## ⚠️ 当前已知限制与测试边界说明
+## 验证结论与运行边界
 
-1. **云端凭据依赖**：实际语音识别与机器翻译需要用户自行在对应厂商平台申请 API Key（如 Groq、DeepL、火山引擎、OpenAI 等）。
-2. **测试与真实服务边界**：本地全量回归测试与 CI 烟测通过（100% PASS）验证了核心状态机、本地音频回环、UI 契约及错误恢复逻辑的正确性，**不等于各第三方云端服务商的实际在线可用性、配额健康度或全天候长期不间断运行保证**。实际在线体验依赖于所选云端服务的网络环境与厂商服务端状态。
-3. **WASAPI 独占音频限制**：若播放软件启用了 WASAPI 独占输出模式（Exclusive Mode），系统回环录音可能无法采集，请切换为共享模式（Shared Mode）。
-4. **防火墙配置**：首次运行如有 Windows Defender 防火墙网络提示，请点击允许，以便向所配置的 API 发起网络请求。
+### 自动化验证与测试基准
+- 全套 12 套测试（Core、Windows、CloudSpeech、Providers、Domestic、WPF Desktop Smoke、Diagnostics 等）共计 125 项单元及回归测试 100% 通过。
+- 包含针对 Phase 5.5.5 状态机一致性、时间线动态保序、粘性翻译生命周期及高并发请求回归。
+- 包含真实 Zipformer INT8 模型加载与音频转录回归，转录准确率与事件流转正常。
 
----
-
-## 🛡️ 隐私与数据安全说明
-
-- **零数据上报与遥测**：antiDBT 没有设置任何专有的中心服务器，不包含任何数据埋点、用户跟踪或后台遥测。
-- **纯点对点请求**：采集到的音频片段和识别文本仅直接发送至**用户在设置中显式配置的第三方 API 端点**。
-- **本地凭据加密**：所有敏感参数通过 Windows DPAPI 绑定当前登录用户的 Windows 账号加密存储于本地，即使复制了 `settings.json` 也无法在其他机器或用户下解密。
+### 运行边界与注意事项
+- **WASAPI 独占模式限制**：若第三方播放器启用了 WASAPI 独占输出（Exclusive Mode），系统回环录音无法采集该音频流，需将其切换为共享模式（Shared Mode）。
+- **云端服务稳定性**：客户端通过了严格的契约校验与错误容灾测试，但第三方云端 API 的可用性、网络连接状况及调用额度由各服务商自身决定。
+- **特殊音频设备**：专业音频接口（ASIO 独占驱动）、虚拟跳线软件（如 Voicemeeter 独占总线）可能需要针对性配置回环输入源。
 
 ---
 
-## ⚖️ 免责与权利声明 (Disclaimer)
+## 隐私、许可证与免责声明
 
-1. **独立开源产品**：**antiDBT** 是独立开发的开源实时字幕产品。
-2. **使用规范**：用户使用本软件调用第三方 API 时产生的网络流量、费用及对各服务商服务条款（ToS）的遵守，由使用者自行承担。
-
----
-
-## 📄 开源许可证
-
-本项目源码基于 [MIT License](LICENSE) 协议开源。第三方开源依赖与声明请参阅 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- **隐私安全**：antiDBT 没有中央服务器，不收集任何用户使用数据、埋点数据或遥测信息。采集的音频与文本仅在本地处理，或严格根据用户配置直接与第三方 API 端点通信。
+- **凭据加密**：所有 API 密钥均通过 Windows DPAPI 本地加密存储，无法在其他用户或机器环境下解密。
+- **开源许可证**：antiDBT 源码采用 [MIT 许可证](LICENSE) 发布。
+- **第三方组件归属**：
+  - Sherpa-ONNX（Apache-2.0）
+  - ONNX Runtime（MIT）
+  - NAudio（MIT）
+  - Microsoft Cognitive Services Speech SDK（商业运行时许可）
+  - Google Cloud Speech 客户端（Apache-2.0）
+  - Zipformer 模型权重与模型卡采用 Apache-2.0 许可证分发，归属原始训练作者所有。
+  - 详细第三方许可清单见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- **免责声明**：本软件按“现状”（AS IS）提供，不包含任何明示或暗示的商业保证。由于语音环境、口音及机器翻译算法的局限性，转录及翻译结果仅供参考。

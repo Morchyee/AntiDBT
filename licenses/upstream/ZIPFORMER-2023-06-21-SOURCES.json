@@ -1,0 +1,30 @@
+{
+  "license": "Apache-2.0",
+  "modelName": "sherpa-onnx-streaming-zipformer-en-2023-06-21",
+  "files": [
+    {
+      "file": "encoder-epoch-99-avg-1.int8.onnx",
+      "sha256": "32C98281C7BD8B63E3E142D007251B37F120572E8FDEA9A4F5A79CE22B10EC4F",
+      "size": 187823992
+    },
+    {
+      "file": "decoder-epoch-99-avg-1.int8.onnx",
+      "sha256": "093E23C90869898F761F60AA3363F96D43B9C6E5C06A57860C3A5B3407AB8320",
+      "size": 539246
+    },
+    {
+      "file": "joiner-epoch-99-avg-1.int8.onnx",
+      "sha256": "831477D390E59A61F1B6A6F763B9903E6C6366FF6034F1DDBA613BE82637122F",
+      "size": 259335
+    },
+    {
+      "file": "tokens.txt",
+      "sha256": "49E3C2646595FD907228B3C6787069658F67B17377C60AEB8619C4551B2316FB",
+      "size": 5048
+    }
+  ],
+  "modelCard": "https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html",
+  "torchscriptSource": "https://huggingface.co/marcoyang/icefall-libri-giga-pruned-transducer-stateless7-streaming-2023-04-04",
+  "trainingCode": "https://github.com/k2-fsa/icefall/pull/984",
+  "archiveUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-21.tar.bz2"
+}

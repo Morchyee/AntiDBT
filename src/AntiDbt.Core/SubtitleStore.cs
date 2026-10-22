@@ -9,11 +9,40 @@ public sealed record CaptionSegment(long SessionId, string SegmentId, int Revisi
     long? AudioCapturedTimestamp = null, string LastVisibleTranslation = "",
     string? TranslationDisplayGroup = null, string? DisplayTranslationOverride = null)
 {
+    public TimeSpan TranscriptStart { get; init; } = AudioStart;
+    public long SourceVersion { get; internal init; }
+    public long PendingDisplayGroupAttempt { get; internal init; }
+
     // Display fallback is never evidence of a completed translation for Revision.
     public string DisplayTranslation => DisplayTranslationOverride ?? (string.IsNullOrWhiteSpace(SourceText) ? ""
         : !string.IsNullOrWhiteSpace(TranslationText) ? TranslationText
         : !string.IsNullOrWhiteSpace(ProvisionalTranslationText) ? ProvisionalTranslationText
         : LastVisibleTranslation);
+}
+
+public readonly record struct TranslationDisplayGroupMember(
+    long SessionId, string SegmentId, int Revision, string SourceText,
+    string Language, bool IsFinal, TimeSpan AudioStart, TimeSpan AudioEnd,
+    TimeSpan TranscriptStart, long SourceVersion, string? DisplayGroup);
+
+public sealed class TranslationDisplayGroupSnapshot
+{
+    internal SubtitleStore Owner { get; }
+    public long SessionId { get; }
+    public long AttemptId { get; }
+    public IReadOnlyList<TranslationDisplayGroupMember> Members { get; }
+
+    internal TranslationDisplayGroupSnapshot(
+        SubtitleStore owner,
+        long sessionId,
+        long attemptId,
+        TranslationDisplayGroupMember[] members)
+    {
+        Owner = owner;
+        SessionId = sessionId;
+        AttemptId = attemptId;
+        Members = Array.AsReadOnly(members);
+    }
 }
 
 public sealed class SubtitleStore
@@ -23,6 +52,8 @@ public sealed class SubtitleStore
     private readonly Dictionary<string, int> _deleted = new();
     private int _maxHistory;
     private long _session;
+    private long _nextSourceVersion;
+    private long _nextDisplayGroupAttempt;
     public event Action? Changed;
     public SubtitleStore(int maxHistory = 2000) => _maxHistory = Math.Clamp(maxHistory, 1, 10000);
     public int MaxHistory
@@ -107,7 +138,7 @@ public sealed class SubtitleStore
                 for (int i = 0; i < _rows.Count; i++)
                 {
                     if (_rows[i].SessionId != session || !ids.Contains(_rows[i].SegmentId)) continue;
-                    _rows[i] = _rows[i] with { TranslationDisplayGroup = group, LastVisibleTranslation = first ? fallback : "" };
+                    _rows[i] = _rows[i] with { TranslationDisplayGroup = group, LastVisibleTranslation = first ? fallback : "", PendingDisplayGroupAttempt = 0 };
                     first = false;
                 }
             }
@@ -188,18 +219,25 @@ public sealed class SubtitleStore
                     : (provisionalTranslation.Length > 0 ? (old?.TranslatedTimestamp ?? old?.ReceivedTimestamp) : null);
                 long? audioCaptured = old?.SourceText == result.Text ? old.AudioCapturedTimestamp : null;
 
-                row = new(session, result.SegmentId, result.Revision, result.Text,
+                row = new CaptionSegment(session, result.SegmentId, result.Revision, result.Text,
                     exactTranslation, result.IsFinal,
                     result.AudioStart, result.AudioEnd, Stopwatch.GetTimestamp(),
                     translatedTimestamp, result.Language ?? "auto", null,
                     provisionalTranslation, provisionalRevision,
                     null, null, audioCaptured, lastVisible,
-                    sameLanguage && !string.IsNullOrWhiteSpace(result.Text) ? old?.TranslationDisplayGroup : null);
+                    sameLanguage && !string.IsNullOrWhiteSpace(result.Text) ? old?.TranslationDisplayGroup : null)
+                {
+                    TranscriptStart = old?.TranscriptStart ?? result.AudioStart,
+                    SourceVersion = ++_nextSourceVersion,
+                    PendingDisplayGroupAttempt = 0
+                };
+
                 if (index >= 0)
                     _rows[index] = row;
                 else
                     _rows.Add(row);
-                _rows.Sort((a, b) => a.SessionId != b.SessionId ? a.SessionId.CompareTo(b.SessionId) : a.AudioStart.CompareTo(b.AudioStart));
+
+                _rows.Sort(TranscriptOrder.Compare);
                 while (_rows.Count > _maxHistory)
                     _rows.RemoveAt(0);
             }
@@ -209,37 +247,206 @@ public sealed class SubtitleStore
         if (notify) Changed?.Invoke();
         return row;
     }
+
     private void ClearDisplayGroup(string? group)
     {
         if (group is null) return;
         for (int i = 0; i < _rows.Count; i++)
             if (_rows[i].TranslationDisplayGroup == group)
-                _rows[i] = _rows[i] with { TranslationDisplayGroup = null, LastVisibleTranslation = "" };
+                _rows[i] = _rows[i] with { TranslationDisplayGroup = null, LastVisibleTranslation = "", PendingDisplayGroupAttempt = 0 };
     }
-    public bool AssignTranslationDisplayGroup(long session, IReadOnlyList<string> segmentIds, string translation)
+
+    public TranslationDisplayGroupSnapshot? TryPrepareTranslationDisplayGroup(IReadOnlyList<CaptionSegment> expectedMembers)
     {
-        if (segmentIds.Count == 0 || string.IsNullOrWhiteSpace(translation)) return false;
+        if (expectedMembers == null || expectedMembers.Count < 2) return null;
         lock (_sync)
         {
-            if (session != _session) return false;
-            var set = segmentIds.ToHashSet();
-            string group = Guid.NewGuid().ToString("N");
-            bool first = true;
-            for (int i = 0; i < _rows.Count; i++)
+            long session = expectedMembers[0].SessionId;
+            if (session != _session) return null;
+
+            string firstLang = expectedMembers[0].Language;
+            var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var m in expectedMembers)
             {
-                if (_rows[i].SessionId != session || !set.Contains(_rows[i].SegmentId)) continue;
-                _rows[i] = _rows[i] with
+                if (m.SessionId != session) return null;
+                if (string.IsNullOrWhiteSpace(m.SourceText)) return null;
+                if (m.Language != firstLang) return null;
+                if (!seenIds.Add(m.SegmentId)) return null;
+            }
+
+            int[] indices = new int[expectedMembers.Count];
+            for (int i = 0; i < expectedMembers.Count; i++)
+            {
+                var exp = expectedMembers[i];
+                int idx = _rows.FindIndex(r => r.SessionId == session && r.SegmentId == exp.SegmentId);
+                if (idx < 0) return null;
+
+                var live = _rows[idx];
+                if (live.Revision != exp.Revision ||
+                    live.SourceText != exp.SourceText ||
+                    live.Language != exp.Language ||
+                    live.IsFinal != exp.IsFinal ||
+                    live.AudioStart != exp.AudioStart ||
+                    live.AudioEnd != exp.AudioEnd ||
+                    live.TranscriptStart != exp.TranscriptStart ||
+                    live.SourceVersion != exp.SourceVersion)
                 {
-                    TranslationDisplayGroup = group,
-                    TranslationText = first ? translation : "",
-                    LastVisibleTranslation = first ? translation : ""
+                    return null;
+                }
+
+                indices[i] = idx;
+            }
+
+            for (int i = 1; i < indices.Length; i++)
+            {
+                if (indices[i] != indices[i - 1] + 1)
+                    return null;
+            }
+
+            for (int i = 0; i < indices.Length; i++)
+            {
+                var live = _rows[indices[i]];
+                if (live.TranslationDisplayGroup != null)
+                {
+                    for (int j = 0; j < _rows.Count; j++)
+                    {
+                        if (_rows[j].TranslationDisplayGroup == live.TranslationDisplayGroup &&
+                            !seenIds.Contains(_rows[j].SegmentId))
+                        {
+                            return null;
+                        }
+                    }
+                }
+            }
+
+            bool allExact = true;
+            for (int i = 0; i < indices.Length; i++)
+            {
+                var live = _rows[indices[i]];
+                bool isExact = !string.IsNullOrWhiteSpace(live.TranslationText) && live.TranslationRevision == live.Revision;
+                if (!isExact)
+                {
+                    allExact = false;
+                    break;
+                }
+            }
+            if (allExact) return null;
+
+            long attemptId = ++_nextDisplayGroupAttempt;
+            var members = new TranslationDisplayGroupMember[expectedMembers.Count];
+            for (int i = 0; i < indices.Length; i++)
+            {
+                var live = _rows[indices[i]];
+                members[i] = new TranslationDisplayGroupMember(
+                    live.SessionId, live.SegmentId, live.Revision, live.SourceText,
+                    live.Language, live.IsFinal, live.AudioStart, live.AudioEnd,
+                    live.TranscriptStart, live.SourceVersion, live.TranslationDisplayGroup);
+
+                _rows[indices[i]] = live with { PendingDisplayGroupAttempt = attemptId };
+            }
+
+            return new TranslationDisplayGroupSnapshot(this, session, attemptId, members);
+        }
+    }
+
+    public bool AssignTranslationDisplayGroup(TranslationDisplayGroupSnapshot expected, string translation)
+    {
+        if (expected == null || string.IsNullOrWhiteSpace(translation)) return false;
+        if (expected.Members == null || expected.Members.Count < 2) return false;
+
+        lock (_sync)
+        {
+            if (expected.Owner != this || expected.SessionId != _session) return false;
+
+            long session = expected.SessionId;
+            int count = expected.Members.Count;
+            int[] indices = new int[count];
+            var memberIdSet = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int i = 0; i < count; i++)
+            {
+                var exp = expected.Members[i];
+                memberIdSet.Add(exp.SegmentId);
+                int idx = _rows.FindIndex(r => r.SessionId == session && r.SegmentId == exp.SegmentId);
+                if (idx < 0) return false;
+
+                var live = _rows[idx];
+                if (live.Revision != exp.Revision ||
+                    live.SourceText != exp.SourceText ||
+                    live.Language != exp.Language ||
+                    live.IsFinal != exp.IsFinal ||
+                    live.AudioStart != exp.AudioStart ||
+                    live.AudioEnd != exp.AudioEnd ||
+                    live.TranscriptStart != exp.TranscriptStart ||
+                    live.SourceVersion != exp.SourceVersion)
+                {
+                    return false;
+                }
+
+                if (live.PendingDisplayGroupAttempt != expected.AttemptId)
+                {
+                    return false;
+                }
+
+                indices[i] = idx;
+            }
+
+            for (int i = 1; i < indices.Length; i++)
+            {
+                if (indices[i] != indices[i - 1] + 1)
+                    return false;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                var live = _rows[indices[i]];
+                var exp = expected.Members[i];
+                if (live.TranslationDisplayGroup != exp.DisplayGroup)
+                    return false;
+
+                if (live.TranslationDisplayGroup != null)
+                {
+                    for (int j = 0; j < _rows.Count; j++)
+                    {
+                        if (_rows[j].TranslationDisplayGroup == live.TranslationDisplayGroup &&
+                            !memberIdSet.Contains(_rows[j].SegmentId))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            bool allExact = true;
+            for (int i = 0; i < count; i++)
+            {
+                var live = _rows[indices[i]];
+                bool isExact = !string.IsNullOrWhiteSpace(live.TranslationText) && live.TranslationRevision == live.Revision;
+                if (!isExact)
+                {
+                    allExact = false;
+                    break;
+                }
+            }
+            if (allExact) return false;
+
+            string groupId = Guid.NewGuid().ToString("N");
+            for (int i = 0; i < count; i++)
+            {
+                var live = _rows[indices[i]];
+                _rows[indices[i]] = live with
+                {
+                    TranslationDisplayGroup = groupId,
+                    LastVisibleTranslation = (i == 0 ? translation : ""),
+                    PendingDisplayGroupAttempt = 0
                 };
-                first = false;
             }
         }
+
         Changed?.Invoke();
         return true;
     }
+
     public bool ApplyTranslation(long session, string segmentId, int revision, string text)
         => UpdateTranslation(session, segmentId, revision, text, null);
     public bool ApplyTranslationError(long session, string segmentId, int revision, string message)
@@ -280,17 +487,30 @@ public sealed class SubtitleStore
             {
                 TranslationText = text,
                 TranslatedTimestamp = Stopwatch.GetTimestamp(),
-                TranslationError = error,
+                TranslationError = null,
                 ProvisionalTranslationText = "",
                 TranslationRevision = revision,
+                PendingDisplayGroupAttempt = 0,
                 LastVisibleTranslation = old.TranslationDisplayGroup is null ? text : old.LastVisibleTranslation
             };
-            if (old.TranslationDisplayGroup is { } group &&
-                _rows.Where(x => x.TranslationDisplayGroup == group).All(x => !string.IsNullOrWhiteSpace(x.TranslationText)))
+            if (error is null && old.TranslationDisplayGroup is { } group)
             {
-                for (int j = 0; j < _rows.Count; j++)
-                    if (_rows[j].TranslationDisplayGroup == group)
-                        _rows[j] = _rows[j] with { TranslationDisplayGroup = null, LastVisibleTranslation = _rows[j].TranslationText };
+                var groupMembers = _rows.Where(x => x.TranslationDisplayGroup == group).ToList();
+                if (groupMembers.Count > 0 && groupMembers.All(x => !string.IsNullOrWhiteSpace(x.TranslationText) && x.TranslationRevision == x.Revision))
+                {
+                    for (int j = 0; j < _rows.Count; j++)
+                    {
+                        if (_rows[j].TranslationDisplayGroup == group)
+                        {
+                            _rows[j] = _rows[j] with
+                            {
+                                TranslationDisplayGroup = null,
+                                LastVisibleTranslation = _rows[j].TranslationText,
+                                PendingDisplayGroupAttempt = 0
+                            };
+                        }
+                    }
+                }
             }
             CaptionDiagnostics.Record("translation", error is null ? "accepted" : "error-retained", session, segmentId,
                 revision, _rows[i].SourceText.Length, _rows[i].DisplayTranslation.Length, _rows.Count);
@@ -346,6 +566,7 @@ public sealed class SubtitleStore
             {
                 ProvisionalTranslationText = text,
                 TranslationRevision = revision,
+                PendingDisplayGroupAttempt = 0,
                 LastVisibleTranslation = current.TranslationDisplayGroup is null ? text : current.LastVisibleTranslation
             };
         }
